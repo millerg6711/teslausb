@@ -4,3 +4,8 @@
 *.ipr
 *.iws
 .idea/
+
+# TeslaUSB image files
+*.zip
+*.img
+*.img.gz
