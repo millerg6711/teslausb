@@ -99,13 +99,13 @@ After flashing, the SD card will have a `boot` partition visible on your compute
 
 ### Step 2.2: Point to Your Fork
 
-**Important:** The Local Copy Watcher is not in the official teslausb release. You must point the setup to your fork that contains this feature.
+**Important:** The Local Copy Watcher is not in the official teslausb release. You must point the setup to the fork that contains this feature.
 
-Add these lines (replace with your GitHub username):
+Add these lines:
 
 ```bash
-# Pull scripts from your fork instead of the official repo
-export REPO=YourGitHubUsername
+# Pull scripts from the fork with Local Copy Watcher
+export REPO=millerg6711
 export BRANCH=main-dev
 ```
 
