@@ -841,6 +841,12 @@ set_sys_param /sys/devices/system/cpu/cpufreq/policy0/scaling_governor CPU_GOVER
 
 /root/bin/temperature_monitor &
 
+# Start local copy watcher if enabled (provides tamper protection by copying files locally)
+if [ "${LOCAL_COPY_ENABLED:-false}" = "true" ] && [ -x /root/bin/local_copy_watcher.sh ]
+then
+  /root/bin/local_copy_watcher.sh &
+fi
+
 if has_cam_disk
 then
   snapshotloop &

@@ -359,6 +359,40 @@ function check_and_install_temperature_monitor () {
   return 0
 }
 
+function check_and_install_local_copy_watcher () {
+  local install_path="$1"
+
+  if [ "${LOCAL_COPY_ENABLED:-false}" != "true" ]
+  then
+    log_progress "Local Copy Watcher: Not enabled."
+    return 0
+  fi
+
+  # Validate LOCAL_COPY_MAX_SIZE if set (should be a positive integer)
+  if [[ -n "${LOCAL_COPY_MAX_SIZE:+x}" && ! "$LOCAL_COPY_MAX_SIZE" =~ ^[0-9]+$ ]]
+  then
+    log_progress "STOP: LOCAL_COPY_MAX_SIZE must be a positive integer (bytes)."
+    exit 1
+  fi
+
+  # Install inotify-tools if not present
+  if ! command -v inotifywait &> /dev/null
+  then
+    log_progress "Installing inotify-tools for Local Copy Watcher..."
+    DEBIAN_FRONTEND=noninteractive apt-get -y --force-yes install inotify-tools
+  fi
+
+  log_progress "Installing Local Copy Watcher script"
+  copy_script run/local_copy_watcher.sh "$install_path"
+
+  log_progress "Local Copy Watcher enabled."
+  log_progress "  Source: ${LOCAL_COPY_SOURCE:-/mnt/cam/TeslaCam}"
+  log_progress "  Destination: ${LOCAL_COPY_DEST:-/mutable/local_backup}"
+  log_progress "  Max Size: ${LOCAL_COPY_MAX_SIZE:-10737418240} bytes"
+
+  return 0
+}
+
 function install_archive_scripts () {
   local install_path="$1"
   local archive_module="$2"
@@ -789,6 +823,7 @@ then
   check_awake_webhook
 fi
 check_and_install_temperature_monitor /root/bin
+check_and_install_local_copy_watcher /root/bin
 check_and_configure_pushover
 check_and_configure_gotify
 check_and_configure_ifttt

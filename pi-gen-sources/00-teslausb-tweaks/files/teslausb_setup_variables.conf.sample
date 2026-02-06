@@ -487,3 +487,56 @@ export TEMPERATURE_POSTARCHIVE=true
 
 # Uncomment and change if you want a different branch than main-dev
 # export BRANCH=main-dev
+
+################################################################################
+# LOCAL COPY WATCHER (Tamper Protection)
+#
+# The Local Copy Watcher provides an additional layer of protection against
+# footage tampering or deletion. When enabled, it monitors the TeslaCam folders
+# in real-time using inotify and immediately copies new files to a separate
+# backup location on the Pi's storage.
+#
+# This is particularly useful for:
+#   - Turo hosts wanting to protect against guests deleting footage
+#   - Anyone wanting a redundant local copy before network archiving
+#   - Situations where network connectivity may be unreliable
+#
+# How it works:
+#   - Watches RecentClips, SavedClips, and SentryClips folders
+#   - Copies new .mp4, .json, and .png files as soon as they're written
+#   - Works completely offline (no WiFi/internet required)
+#   - Automatically manages storage space by pruning oldest files
+#
+# IMPORTANT: Since this creates a SECOND copy of all footage, you need
+# significantly more storage. See recommendations below.
+#
+# Note: This is independent of the network archive system. Files are copied
+# locally first, then the normal archive process handles network uploads.
+#
+# For full setup instructions, see doc/LocalCopyWatcher.md
+################################################################################
+
+# Uncomment to enable the Local Copy Watcher
+#export LOCAL_COPY_ENABLED=true
+
+# Source directory to watch (default: /mnt/cam/TeslaCam)
+# You typically don't need to change this unless you have a custom mount point.
+#export LOCAL_COPY_SOURCE=/mnt/cam/TeslaCam
+
+# Destination directory for backup copies (default: /mutable/local_backup)
+# You typically don't need to change this.
+#export LOCAL_COPY_DEST=/mutable/local_backup
+
+# Maximum size in bytes for the backup storage (default: 30GB)
+# IMPORTANT: Set this appropriately for your SD card size!
+# When this limit is exceeded, oldest files are automatically pruned.
+#
+# Recommended sizes:
+#   512GB SD card:    200GB = 214748364800
+#   1TB SD card:      400GB = 429496729600  (recommended)
+#
+# NOTE: Use a 1TB microSD card for best results. The Tesla glovebox USB
+# port has limited power, so external SSDs are not recommended.
+# See doc/LocalCopyWatcher.md for full setup instructions.
+#
+#export LOCAL_COPY_MAX_SIZE=429496729600
