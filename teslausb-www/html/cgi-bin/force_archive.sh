@@ -76,7 +76,7 @@ sudo -b bash -c '
     if rsync -avh --timeout=120 --remove-source-files \
         --no-perms --omit-dir-times \
         "TeslaCam/$cliptype/" \
-        "$RSYNC_USER@$RSYNC_SERVER:$RSYNC_PATH/$cliptype/" 2>&1; then
+        "$RSYNC_USER@$RSYNC_SERVER:$RSYNC_PATH/TeslaCam/$cliptype/" 2>&1; then
       
       TOTAL_SYNCED=$((TOTAL_SYNCED + FILE_COUNT))
       echo "$(date): Synced $FILE_COUNT files from $cliptype"
