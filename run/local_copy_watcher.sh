@@ -1,31 +1,53 @@
 #!/bin/bash
 
 # Local Copy Watcher (Periodic Sync)
-# Periodically syncs TeslaCam SavedClips and SentryClips to a local backup location.
-# This provides protection against tampering/deletion by creating redundant copies
-# that persist even if the original files are deleted from the TeslaCam folder.
+# Periodically syncs TeslaCam clips to a local backup location.
+# This provides protection against tampering/deletion by creating redundant copies.
 #
-# Note: Real-time inotifywait monitoring doesn't work when Tesla has exclusive
-# block-level access to the disk image via USB gadget mode. This periodic sync
-# approach remounts the disk to see fresh data and syncs new files.
+# Configuration (set in teslausb_setup_variables.conf):
+#   LOCAL_BACKUP_ENABLED=true          # Enable/disable backup (default: false)
+#   LOCAL_BACKUP_INTERVAL=120          # Sync interval in seconds (default: 120)
+#   LOCAL_BACKUP_MAX_SIZE=32212254720  # Max backup size in bytes (default: 30GB)
+#   LOCAL_BACKUP_SAVED=true            # Backup SavedClips (default: true)
+#   LOCAL_BACKUP_SENTRY=true           # Backup SentryClips (default: true)
+#   LOCAL_BACKUP_RECENT=false          # Backup RecentClips (default: false)
+
+# Source config if available
+if [ -f /root/teslausb_setup_variables.conf ]; then
+  source /root/teslausb_setup_variables.conf
+fi
 
 log() {
-  echo "$(date "+%Y-%m-%d %H:%M:%S") - $*"
+  echo "$(date "+%Y-%m-%d %H:%M:%S") - LOCAL_BACKUP: $*"
 }
 
-# Configuration
-LOCAL_BACKUP_DIR="${LOCAL_BACKUP_DIR:-/backingfiles/local_backup}"
+# Configuration with defaults
+ENABLED="${LOCAL_BACKUP_ENABLED:-false}"
+BACKUP_DIR="${LOCAL_BACKUP_DIR:-/backingfiles/local_backup}"
 CAM_DISK="${CAM_DISK:-/backingfiles/cam_disk.bin}"
 CAM_MOUNT="${CAM_MOUNT:-/mnt/cam}"
-SYNC_INTERVAL="${SYNC_INTERVAL:-120}"  # seconds between syncs (default 2 minutes)
+SYNC_INTERVAL="${LOCAL_BACKUP_INTERVAL:-120}"
+MAX_SIZE="${LOCAL_BACKUP_MAX_SIZE:-32212254720}"  # 30GB default
+BACKUP_SAVED="${LOCAL_BACKUP_SAVED:-true}"
+BACKUP_SENTRY="${LOCAL_BACKUP_SENTRY:-true}"
+BACKUP_RECENT="${LOCAL_BACKUP_RECENT:-false}"
 
-log "Periodic Backup Sync starting..."
-log "Backup directory: $LOCAL_BACKUP_DIR"
-log "Camera disk: $CAM_DISK"
-log "Sync interval: ${SYNC_INTERVAL}s"
+# Check if enabled
+if [ "$ENABLED" != "true" ]; then
+  log "Backup is disabled. Set LOCAL_BACKUP_ENABLED=true to enable."
+  exit 0
+fi
+
+log "Starting..."
+log "  Backup directory: $BACKUP_DIR"
+log "  Sync interval: ${SYNC_INTERVAL}s"
+log "  Max size: $((MAX_SIZE / 1073741824))GB"
+log "  Backup SavedClips: $BACKUP_SAVED"
+log "  Backup SentryClips: $BACKUP_SENTRY"
+log "  Backup RecentClips: $BACKUP_RECENT"
 
 # Create directories
-mkdir -p "$LOCAL_BACKUP_DIR"
+mkdir -p "$BACKUP_DIR"
 mkdir -p "$CAM_MOUNT"
 
 # Function to sync files from TeslaCam to backup
@@ -60,22 +82,26 @@ sync_files() {
     return 1
   fi
   
-  # Sync SavedClips (important clips user explicitly saved)
-  if [ -d "$CAM_MOUNT/TeslaCam/SavedClips" ]; then
-    rsync -av --ignore-existing "$CAM_MOUNT/TeslaCam/SavedClips/" "$LOCAL_BACKUP_DIR/SavedClips/" 2>/dev/null
-    SAVED_COUNT=$(find "$LOCAL_BACKUP_DIR/SavedClips" -type f 2>/dev/null | wc -l)
-    log "SavedClips backup: $SAVED_COUNT files"
+  # Sync SavedClips
+  if [ "$BACKUP_SAVED" = "true" ] && [ -d "$CAM_MOUNT/TeslaCam/SavedClips" ]; then
+    rsync -av --ignore-existing "$CAM_MOUNT/TeslaCam/SavedClips/" "$BACKUP_DIR/SavedClips/" 2>/dev/null
+    SAVED_COUNT=$(find "$BACKUP_DIR/SavedClips" -type f 2>/dev/null | wc -l)
+    log "SavedClips: $SAVED_COUNT files"
   fi
   
-  # Sync SentryClips (automatically captured security events)
-  if [ -d "$CAM_MOUNT/TeslaCam/SentryClips" ]; then
-    rsync -av --ignore-existing "$CAM_MOUNT/TeslaCam/SentryClips/" "$LOCAL_BACKUP_DIR/SentryClips/" 2>/dev/null
-    SENTRY_COUNT=$(find "$LOCAL_BACKUP_DIR/SentryClips" -type f 2>/dev/null | wc -l)
-    log "SentryClips backup: $SENTRY_COUNT files"
+  # Sync SentryClips
+  if [ "$BACKUP_SENTRY" = "true" ] && [ -d "$CAM_MOUNT/TeslaCam/SentryClips" ]; then
+    rsync -av --ignore-existing "$CAM_MOUNT/TeslaCam/SentryClips/" "$BACKUP_DIR/SentryClips/" 2>/dev/null
+    SENTRY_COUNT=$(find "$BACKUP_DIR/SentryClips" -type f 2>/dev/null | wc -l)
+    log "SentryClips: $SENTRY_COUNT files"
   fi
   
-  # Note: RecentClips are not backed up by default to save space
-  # They are continuously overwritten by Tesla anyway
+  # Sync RecentClips (optional - disabled by default)
+  if [ "$BACKUP_RECENT" = "true" ] && [ -d "$CAM_MOUNT/TeslaCam/RecentClips" ]; then
+    rsync -av --ignore-existing "$CAM_MOUNT/TeslaCam/RecentClips/" "$BACKUP_DIR/RecentClips/" 2>/dev/null
+    RECENT_COUNT=$(find "$BACKUP_DIR/RecentClips" -type f 2>/dev/null | wc -l)
+    log "RecentClips: $RECENT_COUNT files"
+  fi
   
   # Cleanup
   umount "$CAM_MOUNT" 2>/dev/null || true
@@ -86,39 +112,35 @@ sync_files() {
 
 # Function to manage backup storage space
 manage_backup_space() {
-  local max_size="${LOCAL_BACKUP_MAX_SIZE:-32212254720}"  # Default 30GB
   local current_size
-  current_size=$(du -sb "$LOCAL_BACKUP_DIR" 2>/dev/null | cut -f1 || echo "0")
+  current_size=$(du -sb "$BACKUP_DIR" 2>/dev/null | cut -f1 || echo "0")
   
-  if [ "$current_size" -gt "$max_size" ]; then
-    log "Storage limit exceeded (${current_size}/${max_size} bytes). Pruning old files..."
+  if [ "$current_size" -gt "$MAX_SIZE" ]; then
+    log "Storage limit exceeded ($((current_size / 1073741824))GB / $((MAX_SIZE / 1073741824))GB). Pruning..."
     
     # Delete oldest files first (by modification time)
-    find "$LOCAL_BACKUP_DIR" -type f -name "*.mp4" -printf '%T@ %p\n' 2>/dev/null | \
+    find "$BACKUP_DIR" -type f -name "*.mp4" -printf '%T@ %p\n' 2>/dev/null | \
       sort -n | \
       while read -r timestamp filepath; do
-        current_size=$(du -sb "$LOCAL_BACKUP_DIR" 2>/dev/null | cut -f1 || echo "0")
-        if [ "$current_size" -le "$max_size" ]; then
+        current_size=$(du -sb "$BACKUP_DIR" 2>/dev/null | cut -f1 || echo "0")
+        if [ "$current_size" -le "$MAX_SIZE" ]; then
           break
         fi
         rm -f "$filepath"
-        log "Pruned: ${filepath#$LOCAL_BACKUP_DIR/}"
+        log "Pruned: ${filepath#$BACKUP_DIR/}"
       done
     
     # Clean up empty directories
-    find "$LOCAL_BACKUP_DIR" -type d -empty -delete 2>/dev/null || true
+    find "$BACKUP_DIR" -type d -empty -delete 2>/dev/null || true
     
-    log "Pruning complete."
+    log "Pruning complete"
   fi
 }
 
 # Main loop
 while true; do
   sync_files
-  
-  # Periodically check storage space
   manage_backup_space
-  
-  log "Sleeping ${SYNC_INTERVAL}s until next sync..."
+  log "Next sync in ${SYNC_INTERVAL}s..."
   sleep "$SYNC_INTERVAL"
 done
