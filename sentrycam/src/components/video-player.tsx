@@ -8,9 +8,21 @@ import {
   useImperativeHandle,
   useCallback,
 } from 'react';
-import { getVideoFilesForGroup } from '@/lib/video-utils';
+import {
+  createStream,
+  loadStream,
+  destroyStream,
+  showStreamFrame,
+  findFrameIndexAtTime,
+  getStreamDuration,
+  type CameraStream,
+} from '@/lib/camera-stream';
 import type { ClipGroup, CameraKey } from '@/types/video';
 import { GRID_LAYOUTS, DEFAULT_LAYOUT } from '@/types/video';
+
+// ---------------------------------------------------------------------------
+// Public interface (unchanged — parent page.tsx doesn't need to change)
+// ---------------------------------------------------------------------------
 
 export interface VideoPlayerRef {
   play: () => void;
@@ -30,19 +42,23 @@ interface VideoPlayerProps {
   onVideoEnd: () => void;
 }
 
+// ---------------------------------------------------------------------------
+// Canvas-based CameraView
+// ---------------------------------------------------------------------------
+
 const CameraView = ({
   label,
-  src,
-  videoRef,
+  canvasRef,
   isMaster,
   isFocused,
+  objectFit,
   onFocus,
 }: {
   label: string;
-  src: string;
-  videoRef: React.RefObject<HTMLVideoElement | null>;
+  canvasRef: (el: HTMLCanvasElement | null) => void;
   isMaster: boolean;
   isFocused: boolean;
+  objectFit?: 'cover' | 'contain';
   onFocus: () => void;
 }) => (
   <div
@@ -60,12 +76,10 @@ const CameraView = ({
       }
     }}
   >
-    <video
-      ref={videoRef}
-      src={src}
-      muted
-      playsInline
-      className="w-full h-full object-cover"
+    <canvas
+      ref={canvasRef}
+      className="w-full h-full"
+      style={{ objectFit: objectFit || 'cover' }}
     />
     <span className="absolute bottom-2 left-2 text-xs font-medium text-white/80 bg-black/50 px-2 py-0.5 rounded backdrop-blur-sm pointer-events-none">
       {label}
@@ -81,270 +95,353 @@ const CameraView = ({
   </div>
 );
 
+// =====================================================================
+// Canvas-based VideoPlayer (VideoDecoder)
+// =====================================================================
+
 export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
   ({ group, layoutId, playbackRate, autoplay, onTimeUpdate, onVideoEnd }, ref) => {
-    const videoRefs = useRef<Map<CameraKey, HTMLVideoElement>>(new Map());
-    const [urls, setUrls] = useState<Map<CameraKey, string>>(new Map());
+    const streamsRef = useRef<Map<CameraKey, CameraStream>>(new Map());
+    const canvasRefs = useRef<Map<CameraKey, HTMLCanvasElement>>(new Map());
+    const [loaded, setLoaded] = useState(false);
+    const [activeCameras, setActiveCameras] = useState<CameraKey[]>([]);
     const [masterCamera, setMasterCamera] = useState<CameraKey>('front');
     const [focusedCamera, setFocusedCamera] = useState<CameraKey | null>(null);
-    const urlsRef = useRef<Map<CameraKey, string>>(new Map());
+
+    // Mutable playback state (refs avoid stale closures in setTimeout)
+    const playingRef = useRef(false);
+    const playTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const nextFrameTimeRef = useRef(0);
+    const currentFrameIndexRef = useRef(0);
+    const slaveFrameIndicesRef = useRef<Map<CameraKey, number>>(new Map());
+    const playbackRateRef = useRef(playbackRate);
+    const onTimeUpdateRef = useRef(onTimeUpdate);
+    const onVideoEndRef = useRef(onVideoEnd);
+
+    // Keep refs up to date
+    playbackRateRef.current = playbackRate;
+    onTimeUpdateRef.current = onTimeUpdate;
+    onVideoEndRef.current = onVideoEnd;
 
     const layout = GRID_LAYOUTS[layoutId] || GRID_LAYOUTS[DEFAULT_LAYOUT];
 
-    const getActiveVideos = useCallback(
-      (): HTMLVideoElement[] => Array.from(videoRefs.current.values()),
-      []
-    );
-
-    // Load video URLs when group changes
+    // -----------------------------------------------------------------
+    // Load streams when group changes
+    // -----------------------------------------------------------------
     useEffect(() => {
       if (!group) return;
 
-      // Revoke previous URLs
-      urlsRef.current.forEach((url) => URL.revokeObjectURL(url));
-
-      const newUrls = getVideoFilesForGroup(group);
-      urlsRef.current = newUrls;
-      setUrls(newUrls);
-      setFocusedCamera(null);
-
-      // Pick master camera
-      if (newUrls.has('front')) {
-        setMasterCamera('front');
-      } else {
-        const first = newUrls.keys().next().value;
-        if (first) setMasterCamera(first);
-      }
-
-      return () => {
-        // Only revoke on unmount, not on re-run
-        // (re-run revokes at the top of the effect)
-      };
-    }, [group]);
-
-    // Autoplay: once videos have src and can play, start them
-    useEffect(() => {
-      if (!autoplay || urls.size === 0) return;
-
       let cancelled = false;
 
-      const playAll = () => {
+      const doLoad = async () => {
+        // Destroy previous streams
+        streamsRef.current.forEach((s) => destroyStream(s));
+        streamsRef.current.clear();
+        setLoaded(false);
+
+        // Determine master camera
+        const master: CameraKey = group.filesByCamera.has('front') ? 'front'
+          : (group.filesByCamera.keys().next().value as CameraKey);
+
+        // Create and load streams in parallel
+        const cameras: CameraKey[] = [];
+        const loadPromises: Promise<void>[] = [];
+
+        for (const [cam, file] of group.filesByCamera) {
+          const canvas = canvasRefs.current.get(cam) || null;
+          const stream = createStream(cam, canvas);
+          streamsRef.current.set(cam, stream);
+          cameras.push(cam);
+
+          // Only master camera parses SEI telemetry
+          const isMaster = cam === master;
+          loadPromises.push(
+            loadStream(stream, file, isMaster ? await getSeiType() : null)
+          );
+        }
+
+        await Promise.all(loadPromises);
         if (cancelled) return;
-        Array.from(videoRefs.current.values()).forEach((v) =>
-          v.play().catch(() => {})
-        );
+
+        setMasterCamera(master);
+        setActiveCameras(cameras);
+        setFocusedCamera(null);
+        currentFrameIndexRef.current = 0;
+        setLoaded(true);
+
+        // Show first frame
+        syncAllStreamsToIndex(0);
+
+        // Report initial duration
+        const masterStream = streamsRef.current.get(master);
+        if (masterStream) {
+          const dur = getStreamDuration(masterStream);
+          onTimeUpdateRef.current(0, dur / 1000);
+        }
       };
 
-      // Poll until refs are populated and at least one video is ready
-      const poll = setInterval(() => {
-        if (cancelled) { clearInterval(poll); return; }
-
-        const videos = Array.from(videoRefs.current.values());
-        if (videos.length === 0) return;
-
-        // Check if any video is ready to play
-        const ready = videos.some((v) => v.readyState >= 2);
-        if (ready) {
-          clearInterval(poll);
-          playAll();
-          return;
-        }
-
-        // Attach canplay listener to first video as backup
-        const first = videos[0];
-        if (first && !first.dataset.autoplayListening) {
-          first.dataset.autoplayListening = '1';
-          first.addEventListener('canplay', () => {
-            clearInterval(poll);
-            playAll();
-          }, { once: true });
-        }
-      }, 50);
-
-      // Fallback
-      const timeout = setTimeout(() => {
-        clearInterval(poll);
-        playAll();
-      }, 3000);
+      doLoad();
 
       return () => {
         cancelled = true;
-        clearInterval(poll);
-        clearTimeout(timeout);
+        stopPlayback();
+        streamsRef.current.forEach((s) => destroyStream(s));
+        streamsRef.current.clear();
       };
-    }, [urls, autoplay]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [group]);
 
-    // Sync playback rate
+    // Autoplay after loading
     useEffect(() => {
-      getActiveVideos().forEach((v) => {
-        if (!isNaN(playbackRate)) v.playbackRate = playbackRate;
-      });
-    }, [playbackRate, urls, getActiveVideos]);
-
-    // Master video drives time updates and keeps slave videos in sync.
-    // Uses requestVideoFrameCallback for frame-accurate master timing when
-    // available (fires exactly when a frame is composited), with rAF fallback.
-    // Slave sync uses VPBR (Variable Playback Rate) — gently nudging slave
-    // playback rates to converge rather than hard-seeking (which causes stutter).
-    useEffect(() => {
-      const master = videoRefs.current.get(masterCamera);
-      if (!master) return;
-
-      let running = true;
-      let rafHandle = 0;
-      let rvfcHandle = 0;
-      let lastSyncTime = 0;
-
-      // Check for RVFC support without triggering TypeScript type narrowing
-      const useRVFC = typeof (master as unknown as Record<string, unknown>).requestVideoFrameCallback === 'function';
-
-      // VPBR sync: adjust slave playback rates to converge on master time.
-      // Only hard-seeks as a last resort for extreme drift.
-      const syncSlaves = (masterTime: number) => {
-        const masterRate = master.playbackRate || 1;
-        const driftThreshold = Math.max(0.03, 0.1 / masterRate);
-
-        const now = performance.now();
-        const syncInterval = Math.max(30, 100 / masterRate);
-        if (now - lastSyncTime < syncInterval) return;
-        lastSyncTime = now;
-
-        videoRefs.current.forEach((video, cam) => {
-          if (cam === masterCamera) return;
-          if (video.paused || video.ended) return;
-
-          const drift = video.currentTime - masterTime; // +ahead, -behind
-
-          if (Math.abs(drift) > 0.5) {
-            // Extreme drift — hard seek as last resort
-            video.currentTime = masterTime;
-            video.playbackRate = masterRate;
-          } else if (Math.abs(drift) > driftThreshold) {
-            // VPBR: nudge rate to converge. Scale correction with drift size.
-            const correction = 1 + Math.sign(-drift) * Math.min(0.05, Math.abs(drift) * 0.5);
-            video.playbackRate = masterRate * correction;
-          } else if (video.playbackRate !== masterRate) {
-            // Back in sync — reset rate
-            video.playbackRate = masterRate;
-          }
-        });
-      };
-
-      // requestVideoFrameCallback path: fires per-frame with precise mediaTime
-      const rvfcTick = (_now: DOMHighResTimeStamp, metadata: { mediaTime: number }) => {
-        if (!running) return;
-        const mediaTime = metadata.mediaTime;
-        onTimeUpdate(mediaTime, master.duration);
-        syncSlaves(mediaTime);
-        rvfcHandle = (master as HTMLVideoElement & { requestVideoFrameCallback: (cb: (n: DOMHighResTimeStamp, m: { mediaTime: number }) => void) => number }).requestVideoFrameCallback(rvfcTick);
-      };
-
-      // requestAnimationFrame path — used as sole driver when RVFC is
-      // unavailable, or as a paused-state updater alongside RVFC.
-      const rafTick = () => {
-        if (!running) return;
-        if (!master.paused && !master.ended && master.readyState >= 2) {
-          // When RVFC is active it handles playing-state updates;
-          // rAF only fires updates when RVFC is unavailable.
-          if (!useRVFC) {
-            onTimeUpdate(master.currentTime, master.duration);
-            syncSlaves(master.currentTime);
-          }
-        }
-        rafHandle = requestAnimationFrame(rafTick);
-      };
-
-      if (useRVFC) {
-        rvfcHandle = (master as HTMLVideoElement & { requestVideoFrameCallback: (cb: (n: DOMHighResTimeStamp, m: { mediaTime: number }) => void) => number }).requestVideoFrameCallback(rvfcTick);
+      if (loaded && autoplay) {
+        startPlayback();
       }
-      // Always start rAF: sole driver without RVFC, or paused-state fallback with RVFC
-      rafHandle = requestAnimationFrame(rafTick);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [loaded, autoplay]);
 
-      const handleEnd = () => onVideoEnd();
-      master.addEventListener('ended', handleEnd);
-
-      return () => {
-        running = false;
-        cancelAnimationFrame(rafHandle);
-        if (useRVFC && rvfcHandle) {
-          (master as HTMLVideoElement & { cancelVideoFrameCallback: (id: number) => void }).cancelVideoFrameCallback(rvfcHandle);
-        }
-        // Reset slave playback rates on cleanup
-        videoRefs.current.forEach((video, cam) => {
-          if (cam !== masterCamera) {
-            try { video.playbackRate = master.playbackRate || 1; } catch {}
+    // Re-attach canvases to streams when canvas refs change (layout switch)
+    useEffect(() => {
+      streamsRef.current.forEach((stream, cam) => {
+        const canvas = canvasRefs.current.get(cam) || null;
+        if (canvas && stream.canvas !== canvas) {
+          stream.canvas = canvas;
+          stream.ctx = canvas.getContext('2d');
+          if (stream.config) {
+            canvas.width = stream.config.width;
+            canvas.height = stream.config.height;
           }
-        });
-        master.removeEventListener('ended', handleEnd);
-      };
-    }, [masterCamera, onTimeUpdate, onVideoEnd, urls]);
-
-    // Escape key to unfocus
-    useEffect(() => {
-      const handleKey = (e: KeyboardEvent) => {
-        if (e.key === 'Escape' && focusedCamera) {
-          setFocusedCamera(null);
+          // Re-render current frame on the new canvas
+          if (stream.frames.length > 0) {
+            const masterStream = streamsRef.current.get(masterCamera);
+            if (masterStream && masterStream.frames[currentFrameIndexRef.current]) {
+              const t = masterStream.frames[currentFrameIndexRef.current].timestamp;
+              const idx = findFrameIndexAtTime(stream, t);
+              showStreamFrame(stream, idx);
+            }
+          }
         }
-      };
-      window.addEventListener('keydown', handleKey);
-      return () => window.removeEventListener('keydown', handleKey);
-    }, [focusedCamera]);
+      });
+    });
 
-    // Cleanup URLs on unmount
-    useEffect(() => {
-      return () => {
-        urlsRef.current.forEach((url) => URL.revokeObjectURL(url));
-      };
+    // -----------------------------------------------------------------
+    // Playback scheduler — drift-correcting clock (like teslareplay)
+    // -----------------------------------------------------------------
+
+    // Timestamp-based sync — used for initial load and user-initiated seeks.
+    // Positions each slave via binary search on timestamp.
+    const syncAllStreamsToIndex = useCallback((index: number) => {
+      const masterStream = streamsRef.current.get(masterCamera);
+      if (!masterStream || !masterStream.frames[index]) return;
+
+      const masterTimestamp = masterStream.frames[index].timestamp;
+
+      // Decode master
+      showStreamFrame(masterStream, index);
+
+      // Decode slaves at the matching timestamp
+      streamsRef.current.forEach((stream, cam) => {
+        if (cam === masterCamera) return;
+        if (stream.frames.length === 0) return;
+        const slaveIdx = findFrameIndexAtTime(stream, masterTimestamp);
+        slaveFrameIndicesRef.current.set(cam, slaveIdx);
+        showStreamFrame(stream, slaveIdx);
+      });
+
+      // Report time to parent (seconds)
+      const duration = getStreamDuration(masterStream) / 1000;
+      onTimeUpdateRef.current(masterTimestamp / 1000, duration);
+    }, [masterCamera]);
+
+    // Sequential advance — used during playback. All cameras advance by +1
+    // frame, keeping every stream on the fast sequential decode path.
+    // Drift correction every 30 frames re-syncs slaves by timestamp.
+    const advanceAllStreams = useCallback(() => {
+      const masterStream = streamsRef.current.get(masterCamera);
+      if (!masterStream) return;
+
+      const masterIndex = currentFrameIndexRef.current;
+      if (!masterStream.frames[masterIndex]) return;
+
+      const masterTimestamp = masterStream.frames[masterIndex].timestamp;
+
+      // Decode master
+      showStreamFrame(masterStream, masterIndex);
+
+      // Advance slaves sequentially
+      streamsRef.current.forEach((stream, cam) => {
+        if (cam === masterCamera) return;
+        if (stream.frames.length === 0) return;
+
+        const prevIdx = slaveFrameIndicesRef.current.get(cam) ?? 0;
+        let nextIdx = prevIdx + 1;
+
+        // Clamp to valid range
+        if (nextIdx >= stream.frames.length) nextIdx = stream.frames.length - 1;
+
+        // Periodic drift correction: every 30 frames, check timestamp alignment
+        if (masterIndex % 30 === 0) {
+          const correctIdx = findFrameIndexAtTime(stream, masterTimestamp);
+          if (Math.abs(correctIdx - nextIdx) > 1) {
+            nextIdx = correctIdx;
+          }
+        }
+
+        slaveFrameIndicesRef.current.set(cam, nextIdx);
+        showStreamFrame(stream, nextIdx);
+      });
+
+      // Report time to parent (seconds)
+      const duration = getStreamDuration(masterStream) / 1000;
+      onTimeUpdateRef.current(masterTimestamp / 1000, duration);
+    }, [masterCamera]);
+
+    const playNext = useCallback(() => {
+      if (!playingRef.current) return;
+
+      const masterStream = streamsRef.current.get(masterCamera);
+      if (!masterStream) return;
+
+      const next = currentFrameIndexRef.current + 1;
+
+      // End of stream
+      if (next >= masterStream.frames.length) {
+        stopPlayback();
+        onVideoEndRef.current();
+        return;
+      }
+
+      // Backpressure: if decoder queue is backing up, wait
+      if (masterStream.decoder && masterStream.decoder.decodeQueueSize > 5) {
+        playTimerRef.current = setTimeout(playNext, 5);
+        return;
+      }
+
+      currentFrameIndexRef.current = next;
+      advanceAllStreams();
+
+      // Drift-correcting scheduling
+      const frameDur = masterStream.frames[next].duration || 33;
+      const scaledDur = frameDur / playbackRateRef.current;
+
+      nextFrameTimeRef.current += scaledDur;
+      const now = performance.now();
+      let delay = nextFrameTimeRef.current - now;
+
+      // Sync recovery: if we've fallen behind > 100ms, reset clock
+      if (delay < -100) {
+        nextFrameTimeRef.current = now;
+        delay = 0;
+      }
+
+      playTimerRef.current = setTimeout(playNext, Math.max(0, delay));
+    }, [masterCamera, advanceAllStreams]);
+
+    const startPlayback = useCallback(() => {
+      if (playingRef.current) return;
+      const masterStream = streamsRef.current.get(masterCamera);
+      if (!masterStream || masterStream.frames.length === 0) return;
+
+      playingRef.current = true;
+      nextFrameTimeRef.current = performance.now();
+      playNext();
+    }, [masterCamera, playNext]);
+
+    const stopPlayback = useCallback(() => {
+      playingRef.current = false;
+      if (playTimerRef.current !== null) {
+        clearTimeout(playTimerRef.current);
+        playTimerRef.current = null;
+      }
+      // Flush decoders so the last frame is actually drawn
+      streamsRef.current.forEach((stream) => {
+        if (stream.decoder && stream.decoder.state === 'configured') {
+          stream.decoder.flush().catch(() => {});
+        }
+      });
     }, []);
 
+    // -----------------------------------------------------------------
+    // Imperative API (same interface as before)
+    // -----------------------------------------------------------------
+
     useImperativeHandle(ref, () => ({
-      play: () => getActiveVideos().forEach((v) => v.play().catch(() => {})),
-      pause: () => getActiveVideos().forEach((v) => v.pause()),
+      play: () => startPlayback(),
+      pause: () => stopPlayback(),
       seek: (time: number) => {
         if (!isFinite(time)) return;
-        getActiveVideos().forEach((v) => (v.currentTime = time));
+        const masterStream = streamsRef.current.get(masterCamera);
+        if (!masterStream) return;
+
+        const timeMs = time * 1000;
+        const idx = findFrameIndexAtTime(masterStream, timeMs);
+        currentFrameIndexRef.current = idx;
+        syncAllStreamsToIndex(idx);
+
+        // Reset scheduling clock if playing
+        if (playingRef.current) {
+          nextFrameTimeRef.current = performance.now();
+        }
       },
-      setPlaybackRate: (rate: number) =>
-        getActiveVideos().forEach((v) => (v.playbackRate = rate)),
+      setPlaybackRate: (rate: number) => {
+        playbackRateRef.current = rate;
+      },
       toggleMute: () => {
-        const videos = getActiveVideos();
-        const isMuted = videos.some((v) => v.muted);
-        videos.forEach((v) => (v.muted = !isMuted));
+        // Canvas rendering has no audio — no-op
       },
       getMasterFile: () => {
         if (!group) return null;
         return group.filesByCamera.get(masterCamera) || null;
       },
-    }));
+    }), [group, masterCamera, startPlayback, stopPlayback, syncAllStreamsToIndex]);
 
-    if (!group || urls.size === 0) return null;
+    // Escape to exit focus mode
+    useEffect(() => {
+      const handleKey = (e: KeyboardEvent) => {
+        if (e.key === 'Escape' && focusedCamera) setFocusedCamera(null);
+      };
+      window.addEventListener('keydown', handleKey);
+      return () => window.removeEventListener('keydown', handleKey);
+    }, [focusedCamera]);
 
-    const activeSlots = layout.slots.filter((slot) => urls.has(slot.camera));
+    // -----------------------------------------------------------------
+    // Render
+    // -----------------------------------------------------------------
 
-    const makeVideoRef = (camera: CameraKey) => ({
-      get current() {
-        return videoRefs.current.get(camera) || null;
-      },
-      set current(el: HTMLVideoElement | null) {
-        if (el) videoRefs.current.set(camera, el);
-        else videoRefs.current.delete(camera);
-      },
-    });
+    if (!group || activeCameras.length === 0) return null;
 
-    // Focus mode: show only focused camera full-size
-    if (focusedCamera && urls.has(focusedCamera)) {
+    const activeSlots = layout.slots.filter((slot) => activeCameras.includes(slot.camera));
+
+    const makeCanvasRef = (camera: CameraKey) => (el: HTMLCanvasElement | null) => {
+      if (el) {
+        canvasRefs.current.set(camera, el);
+        // Attach canvas to existing stream
+        const stream = streamsRef.current.get(camera);
+        if (stream && stream.canvas !== el) {
+          stream.canvas = el;
+          stream.ctx = el.getContext('2d');
+          if (stream.config) {
+            el.width = stream.config.width;
+            el.height = stream.config.height;
+          }
+        }
+      } else {
+        canvasRefs.current.delete(camera);
+      }
+    };
+
+    // Focus mode
+    if (focusedCamera && activeCameras.includes(focusedCamera)) {
       const slot = activeSlots.find((s) => s.camera === focusedCamera);
       if (slot) {
-        const url = urls.get(slot.camera)!;
         return (
           <div className="relative w-full h-full rounded-xl overflow-hidden bg-black">
             <CameraView
               label={slot.label}
-              src={url}
+              canvasRef={makeCanvasRef(slot.camera)}
               isMaster={slot.camera === masterCamera}
               isFocused={true}
+              objectFit="contain"
               onFocus={() => setFocusedCamera(null)}
-              videoRef={makeVideoRef(slot.camera)}
             />
             <button
               className="absolute top-3 left-3 z-20 text-xs text-white/60 bg-black/40 px-2 py-1 rounded backdrop-blur-sm hover:text-white hover:bg-black/60 transition-colors"
@@ -362,60 +459,39 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
     if (layout.immersive) {
       const mainCamera = activeSlots.find((s) => s.camera === 'front') || activeSlots[0];
       const overlaySlots = activeSlots.filter((s) => s.camera !== mainCamera?.camera);
-
-      // Position overlays: TL, TR, BL, BC, BR
       const overlayPositions = [
-        'top-2 left-2',
-        'top-2 right-2',
-        'bottom-2 left-2',
-        'bottom-2 left-1/2 -translate-x-1/2',
-        'bottom-2 right-2',
+        'top-2 left-2', 'top-2 right-2', 'bottom-2 left-2',
+        'bottom-2 left-1/2 -translate-x-1/2', 'bottom-2 right-2',
       ];
 
       return (
         <div className="relative w-full h-full rounded-xl overflow-hidden bg-black">
-          {/* Main camera — full screen */}
-          {mainCamera && urls.get(mainCamera.camera) && (
+          {mainCamera && (
             <div className="absolute inset-0 z-0">
-              <video
-                ref={(el) => {
-                  if (el) videoRefs.current.set(mainCamera.camera, el);
-                  else videoRefs.current.delete(mainCamera.camera);
-                }}
-                src={urls.get(mainCamera.camera)}
-                muted
-                playsInline
-                className="w-full h-full object-contain"
+              <canvas
+                ref={makeCanvasRef(mainCamera.camera)}
+                className="w-full h-full"
+                style={{ objectFit: 'contain' }}
               />
               <span className="absolute bottom-2 left-2 text-xs font-medium text-white/60 bg-black/50 px-2 py-0.5 rounded backdrop-blur-sm pointer-events-none z-20">
                 {mainCamera.label}
               </span>
             </div>
           )}
-
-          {/* PiP overlays */}
           {overlaySlots.map((slot, i) => {
-            const url = urls.get(slot.camera);
-            if (!url || i >= overlayPositions.length) return null;
-            const posClass = overlayPositions[i];
-
+            if (i >= overlayPositions.length) return null;
             return (
               <div
                 key={slot.camera}
-                className={`absolute ${posClass} z-10 w-[18%] aspect-video rounded-lg overflow-hidden border border-white/15 bg-black/40 shadow-lg opacity-90 hover:opacity-100 hover:scale-[1.03] hover:z-20 transition-all duration-200 cursor-pointer`}
+                className={`absolute ${overlayPositions[i]} z-10 w-[18%] aspect-video rounded-lg overflow-hidden border border-white/15 bg-black/40 shadow-lg opacity-90 hover:opacity-100 hover:scale-[1.03] hover:z-20 transition-all duration-200 cursor-pointer`}
                 onClick={() => setFocusedCamera(slot.camera)}
                 role="button"
                 aria-label={`Focus ${slot.label} camera`}
               >
-                <video
-                  ref={(el) => {
-                    if (el) videoRefs.current.set(slot.camera, el);
-                    else videoRefs.current.delete(slot.camera);
-                  }}
-                  src={url}
-                  muted
-                  playsInline
-                  className="w-full h-full object-cover"
+                <canvas
+                  ref={makeCanvasRef(slot.camera)}
+                  className="w-full h-full"
+                  style={{ objectFit: 'cover' }}
                 />
                 <span className="absolute top-1 left-1 text-[8px] font-medium text-white/70 bg-black/60 px-1.5 py-0.5 rounded backdrop-blur-sm pointer-events-none">
                   {slot.label}
@@ -428,35 +504,47 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
     }
 
     // Standard grid mode
-    const columns =
-      activeSlots.length <= 2
-        ? activeSlots.length
-        : Math.min(layout.columns, activeSlots.length);
+    const columns = activeSlots.length <= 2
+      ? activeSlots.length
+      : Math.min(layout.columns, activeSlots.length);
 
     return (
       <div
         className="grid gap-1 rounded-xl overflow-hidden bg-black/40 p-1 h-full"
         style={{ gridTemplateColumns: `repeat(${columns}, 1fr)` }}
       >
-        {activeSlots.map((slot) => {
-          const url = urls.get(slot.camera);
-          if (!url) return null;
-
-          return (
-            <CameraView
-              key={slot.camera}
-              label={slot.label}
-              src={url}
-              isMaster={slot.camera === masterCamera}
-              isFocused={false}
-              onFocus={() => setFocusedCamera(slot.camera)}
-              videoRef={makeVideoRef(slot.camera)}
-            />
-          );
-        })}
+        {activeSlots.map((slot) => (
+          <CameraView
+            key={slot.camera}
+            label={slot.label}
+            canvasRef={makeCanvasRef(slot.camera)}
+            isMaster={slot.camera === masterCamera}
+            isFocused={false}
+            onFocus={() => setFocusedCamera(slot.camera)}
+          />
+        ))}
       </div>
     );
   }
 );
 
 VideoPlayer.displayName = 'VideoPlayer';
+
+// =====================================================================
+// Helper: lazy-load protobuf SeiMetadata type for master camera telemetry
+// =====================================================================
+
+let seiTypeCache: unknown = null;
+
+async function getSeiType(): Promise<unknown> {
+  if (seiTypeCache) return seiTypeCache;
+  try {
+    const protobuf = await import('protobufjs');
+    const root = await protobuf.load('/dashcam.proto');
+    seiTypeCache = root.lookupType('SeiMetadata');
+    return seiTypeCache;
+  } catch (e) {
+    console.warn('Failed to load dashcam.proto for SEI parsing:', e);
+    return null;
+  }
+}

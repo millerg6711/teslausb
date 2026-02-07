@@ -81,10 +81,13 @@ export class DashcamMP4 {
             pos += 8;
         }
 
+        // Raw avcC box content for VideoDecoder description
+        const avcCData = new Uint8Array(this.buffer.slice(avcC.start, avcC.end));
+
         this._config = {
             width: this.view.getUint16(avc1.start + 24),
             height: this.view.getUint16(avc1.start + 26),
-            codec, sps, pps, timescale, durations
+            codec, sps, pps, timescale, durations, avcCData
         };
         return this._config;
     }
