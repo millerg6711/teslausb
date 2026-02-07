@@ -484,3 +484,169 @@ When the Pi presents the disk image to Tesla via USB gadget mode, Tesla writes d
 3. `inotifywait` only detects changes made through the local filesystem
 
 The periodic sync approach solves this by unmounting and remounting the disk image each cycle, which forces the filesystem to read fresh data from the block device.
+
+---
+
+## Part 7: Network Archive Setup (Optional)
+
+For faster video viewing and SEI telemetry display, you can configure the Pi to archive footage to your home computer when the car returns home.
+
+### Benefits of Network Archive
+
+- **Faster playback**: Videos stream from your Mac/PC instead of slow Pi wifi
+- **SEI telemetry**: View speed, GPS, autopilot status overlaid on videos
+- **Redundancy**: Three copies of footage (USB, local backup, network archive)
+- **Auto-cleanup**: Local backup is cleaned up after successful network archive
+
+### Architecture
+
+```
+While car is away:
+  Tesla → USB drive → Local backup (tamper protection)
+
+When car returns home:
+  Local backup → Network archive (rsync over SSH)
+              → Deleted from local backup (frees space)
+```
+
+### Step 7.1: Create a Dedicated User (Recommended)
+
+For security, create a dedicated user that can ONLY receive dashcam files:
+
+**On your Mac:**
+
+```bash
+# Create teslausb user
+sudo dscl . -create /Users/teslausb
+sudo dscl . -create /Users/teslausb UserShell /bin/bash
+sudo dscl . -create /Users/teslausb RealName "TeslaUSB Backup"
+sudo dscl . -create /Users/teslausb UniqueID 599
+sudo dscl . -create /Users/teslausb PrimaryGroupID 20
+sudo dscl . -create /Users/teslausb NFSHomeDirectory /Users/teslausb
+sudo mkdir -p /Users/teslausb
+sudo chown teslausb:staff /Users/teslausb
+
+# Enable Remote Login (SSH)
+# Go to System Settings → General → Sharing → Remote Login → On
+# Add teslausb to allowed users
+sudo dseditgroup -o edit -a teslausb -t user com.apple.access_ssh
+```
+
+### Step 7.2: Set Up SSH Key Authentication
+
+**On the Pi** (via SSH):
+
+```bash
+sudo -i
+/root/bin/remountfs_rw
+
+# Generate SSH key
+mkdir -p /root/.ssh
+ssh-keygen -t ed25519 -f /root/.ssh/id_ed25519 -N "" -C "teslausb-archive"
+
+# Display the public key
+cat /root/.ssh/id_ed25519.pub
+```
+
+Copy the public key output.
+
+### Step 7.3: Configure Restricted Access on Mac
+
+**On your Mac:**
+
+```bash
+# Create directories
+sudo mkdir -p /Users/teslausb/.ssh
+sudo mkdir -p /Users/teslausb/TeslaCam
+sudo mkdir -p /Users/teslausb/bin
+
+# Create restricted rsync wrapper
+sudo tee /Users/teslausb/bin/rrsync-teslacam << 'EOF'
+#!/bin/bash
+# Restricted rsync - only allows rsync to TeslaCam
+if [[ "$SSH_ORIGINAL_COMMAND" != rsync\ --server* ]]; then
+    echo "Only rsync is allowed" >&2
+    exit 1
+fi
+if [[ "$SSH_ORIGINAL_COMMAND" == *".."* ]]; then
+    echo "Path traversal not allowed" >&2
+    exit 1
+fi
+if [[ "$SSH_ORIGINAL_COMMAND" != *"TeslaCam"* ]]; then
+    echo "Access restricted to TeslaCam directory" >&2
+    exit 1
+fi
+exec $SSH_ORIGINAL_COMMAND
+EOF
+sudo chmod +x /Users/teslausb/bin/rrsync-teslacam
+
+# Add SSH key with restrictions (paste your Pi's public key)
+echo 'command="/Users/teslausb/bin/rrsync-teslacam",restrict YOUR_PUBLIC_KEY_HERE' | sudo tee /Users/teslausb/.ssh/authorized_keys
+
+# Fix permissions
+sudo chown -R teslausb:staff /Users/teslausb
+sudo chmod 700 /Users/teslausb/.ssh
+sudo chmod 600 /Users/teslausb/.ssh/authorized_keys
+```
+
+### Step 7.4: Disable Password Authentication (Security)
+
+```bash
+sudo bash -c 'cat >> /etc/ssh/sshd_config << EOF
+
+# Security hardening - key-only authentication
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+EOF
+'
+sudo launchctl stop com.openssh.sshd
+sudo launchctl start com.openssh.sshd
+```
+
+### Step 7.5: Configure Pi for Network Archive
+
+**On the Pi** (via SSH):
+
+```bash
+sudo -i
+/root/bin/remountfs_rw
+
+# Add to /root/teslausb_setup_variables.conf:
+cat >> /root/teslausb_setup_variables.conf << 'EOF'
+
+# === Network Archive Configuration ===
+export ARCHIVE_SYSTEM=rsync
+export RSYNC_USER=teslausb
+export RSYNC_SERVER=YOUR_MAC_IP_ADDRESS
+export RSYNC_PATH=/Users/teslausb/TeslaCam
+
+# Delete from local backup after successful network archive
+export LOCAL_BACKUP_DELETE_AFTER_ARCHIVE=true
+EOF
+
+# Add Mac's host key
+ssh-keyscan -t ed25519 YOUR_MAC_IP_ADDRESS >> /root/.ssh/known_hosts
+
+/root/bin/remountfs_ro
+```
+
+### Step 7.6: Test the Connection
+
+```bash
+# On the Pi
+sudo rsync -av /tmp/test.txt teslausb@YOUR_MAC_IP:/Users/teslausb/TeslaCam/test.txt
+```
+
+### Security Summary
+
+If someone steals the Pi, the SSH key can ONLY:
+
+| Action | Allowed? |
+|--------|----------|
+| Write to TeslaCam | ✅ Yes |
+| Read files | ❌ No |
+| Access other directories | ❌ No |
+| Get shell access | ❌ No |
+| Access your main account | ❌ No |
+
+The dedicated `teslausb` user + restricted wrapper = write-only drop box.
