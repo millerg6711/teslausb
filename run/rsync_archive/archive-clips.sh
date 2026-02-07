@@ -1,4 +1,23 @@
 #!/bin/bash -eu
+#
+# archive-clips.sh - Archive TeslaCam clips to network storage via rsync
+#
+# This script is called by archiveloop when the car returns home and
+# footage needs to be archived to a network destination.
+#
+# Features:
+#   - Transfers files via rsync over SSH
+#   - Removes source files after successful transfer (--remove-source-files)
+#   - Optionally cleans up local backup after successful archive
+#
+# Environment variables:
+#   RSYNC_USER   - SSH username for destination
+#   RSYNC_SERVER - Destination server IP/hostname
+#   RSYNC_PATH   - Destination path on server
+#   LOCAL_BACKUP_DELETE_AFTER_ARCHIVE - If "true", delete from local backup
+#
+# Usage: archive-clips.sh <source_dir> <files_list> [<source_dir2> <files_list2> ...]
+#
 
 # Local backup directory (for cleanup after successful archive)
 LOCAL_BACKUP_DIR="${LOCAL_BACKUP_DIR:-/backingfiles/local_backup}"

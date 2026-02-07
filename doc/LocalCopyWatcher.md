@@ -199,6 +199,7 @@ export SNAPSHOTS_ENABLED=false
 | `LOCAL_BACKUP_SAVED` | true | Backup SavedClips |
 | `LOCAL_BACKUP_SENTRY` | true | Backup SentryClips |
 | `LOCAL_BACKUP_RECENT` | false | Backup RecentClips (uses lots of space) |
+| `LOCAL_BACKUP_DELETE_AFTER_ARCHIVE` | true | Delete from local backup after network archive |
 | `SNAPSHOTS_ENABLED` | true | Disable to save space when using backup |
 
 #### Storage Size Reference
@@ -385,6 +386,56 @@ You should see entries like:
 
 ---
 
+## Web Interface
+
+TeslaUSB includes a web interface for viewing footage and system status.
+
+### Accessing the Web Interface
+
+Open a browser and navigate to:
+
+```
+http://teslausb.local
+```
+
+### Features
+
+| Tab | Description |
+|-----|-------------|
+| **Status** | System status, storage usage, service health |
+| **Recordings** | Browse SavedClips and SentryClips folders |
+| **Viewer** | Play video clips with multi-camera sync |
+| **Diagnostics** | System logs and troubleshooting info |
+
+### SEI Telemetry Display
+
+When playing videos in the Viewer tab, the interface displays Tesla's embedded telemetry data:
+
+- **Speed**: Current vehicle speed in mph
+- **Gear**: Park, Reverse, Neutral, or Drive
+- **Autopilot**: Current autopilot state
+- **Steering**: Steering wheel angle
+- **Brake**: Brake pedal indicator
+- **Location**: GPS coordinates
+- **G-Forces**: Lateral and longitudinal acceleration
+
+**Note:** SEI data requires Tesla firmware 2025.44.25+ and Hardware 3+. Older clips may not contain telemetry.
+
+### CLI SEI Extraction
+
+For batch processing or scripting, use the included Python tool:
+
+```bash
+# Extract SEI summary from a single file
+python3 tools/extract_sei_metadata.py /path/to/video.mp4
+
+# Process all files in a directory
+python3 tools/extract_sei_metadata.py /path/to/clips/ --summary
+
+# Output full telemetry as JSON
+python3 tools/extract_sei_metadata.py /path/to/video.mp4 --full --json
+```
+
 ---
 
 ## Security Summary
@@ -467,13 +518,14 @@ sudo rm -rf /backingfiles/local_backup/SavedClips/*
 
 ## Technical Details
 
-- **Sync method**: Periodic `rsync` every 2 minutes (configurable via `SYNC_INTERVAL`)
+- **Sync method**: Periodic `rsync` every 2 minutes (configurable via `LOCAL_BACKUP_INTERVAL`)
 - **Folders backed up**: SavedClips and SentryClips (not RecentClips to save space)
-- **Copy method**: `rsync -av --ignore-existing` (only copies new files)
+- **Copy method**: `rsync -av` (compares size + mtime, re-copies incomplete files)
 - **Mount strategy**: Read-only remount each sync cycle to see fresh data from Tesla
 - **USB gadget**: Uses `g_mass_storage` kernel module to present disk to Tesla
 - **Default backup location**: `/backingfiles/local_backup`
 - **Default max size**: 30GB (configurable via `LOCAL_BACKUP_MAX_SIZE`)
+- **Auto-pruning**: Oldest files deleted when backup exceeds `LOCAL_BACKUP_MAX_SIZE`
 
 ### Why Periodic Sync Instead of Real-Time?
 
