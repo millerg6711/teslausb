@@ -44,13 +44,13 @@ RSYNC_USER="${RSYNC_USER:-}"
 
 # Function to check if network archive is reachable
 network_archive_reachable() {
-  if [ -z "$RSYNC_SERVER" ] || [ -z "$RSYNC_USER" ]; then
+  if [ -z "$RSYNC_SERVER" ]; then
     # No network archive configured, always do local backup
     return 1
   fi
   
-  # Try to reach the server (quick SSH check)
-  if ssh -o BatchMode=yes -o ConnectTimeout=5 "$RSYNC_USER@$RSYNC_SERVER" "true" 2>/dev/null; then
+  # Try to ping the server (quick network check)
+  if ping -c 1 -W 3 "$RSYNC_SERVER" >/dev/null 2>&1; then
     return 0  # Reachable
   else
     return 1  # Not reachable
