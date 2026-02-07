@@ -127,7 +127,7 @@ export const GRID_LAYOUTS: Record<string, GridLayout> = {
   },
 };
 
-export const DEFAULT_LAYOUT = 'four_cam';
+export const DEFAULT_LAYOUT = 'immersive';
 
 export const displayTimestamp = (timestamp: string, showSeconds = false): string => {
   const parts = timestamp.split('_');
