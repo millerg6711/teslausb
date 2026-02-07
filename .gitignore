@@ -12,3 +12,6 @@
 connect.sh
 watch_teslausb_backup.sh
 dashcam/
+sentrycam.video/
+
+teslareplay/
