@@ -849,7 +849,10 @@ fi
 
 if has_cam_disk
 then
-  snapshotloop &
+  if [ "${SNAPSHOTS_ENABLED:-true}" = "true" ]
+  then
+    snapshotloop &
+  fi
   freespacemanager &
 fi
 logrotator &
@@ -859,7 +862,7 @@ fix_errors_in_images
 # always remove files that fsck recoverd
 clean_cam_mount boot
 
-if has_cam_disk
+if has_cam_disk && [ "${SNAPSHOTS_ENABLED:-true}" = "true" ]
 then
   # don't need another fsck because fix_errors_in_images already did that
   /root/bin/make_snapshot.sh nofsck
@@ -901,7 +904,7 @@ do
   sleep "${ARCHIVE_DELAY:-20}"
 
   # take a snapshot before archive_clips starts deleting files
-  if has_cam_disk
+  if has_cam_disk && [ "${SNAPSHOTS_ENABLED:-true}" = "true" ]
   then
     /root/bin/make_snapshot.sh
   fi
