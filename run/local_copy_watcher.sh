@@ -83,22 +83,24 @@ sync_files() {
   fi
   
   # Sync SavedClips
+  # Using default rsync behavior (compares size + mtime) instead of --ignore-existing
+  # This ensures incomplete files get re-copied once Tesla finishes writing them
   if [ "$BACKUP_SAVED" = "true" ] && [ -d "$CAM_MOUNT/TeslaCam/SavedClips" ]; then
-    rsync -av --ignore-existing "$CAM_MOUNT/TeslaCam/SavedClips/" "$BACKUP_DIR/SavedClips/" 2>/dev/null
+    rsync -av "$CAM_MOUNT/TeslaCam/SavedClips/" "$BACKUP_DIR/SavedClips/" 2>/dev/null
     SAVED_COUNT=$(find "$BACKUP_DIR/SavedClips" -type f 2>/dev/null | wc -l)
     log "SavedClips: $SAVED_COUNT files"
   fi
   
   # Sync SentryClips
   if [ "$BACKUP_SENTRY" = "true" ] && [ -d "$CAM_MOUNT/TeslaCam/SentryClips" ]; then
-    rsync -av --ignore-existing "$CAM_MOUNT/TeslaCam/SentryClips/" "$BACKUP_DIR/SentryClips/" 2>/dev/null
+    rsync -av "$CAM_MOUNT/TeslaCam/SentryClips/" "$BACKUP_DIR/SentryClips/" 2>/dev/null
     SENTRY_COUNT=$(find "$BACKUP_DIR/SentryClips" -type f 2>/dev/null | wc -l)
     log "SentryClips: $SENTRY_COUNT files"
   fi
   
   # Sync RecentClips (optional - disabled by default)
   if [ "$BACKUP_RECENT" = "true" ] && [ -d "$CAM_MOUNT/TeslaCam/RecentClips" ]; then
-    rsync -av --ignore-existing "$CAM_MOUNT/TeslaCam/RecentClips/" "$BACKUP_DIR/RecentClips/" 2>/dev/null
+    rsync -av "$CAM_MOUNT/TeslaCam/RecentClips/" "$BACKUP_DIR/RecentClips/" 2>/dev/null
     RECENT_COUNT=$(find "$BACKUP_DIR/RecentClips" -type f 2>/dev/null | wc -l)
     log "RecentClips: $RECENT_COUNT files"
   fi
