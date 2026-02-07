@@ -1,16 +1,19 @@
 #!/bin/bash
 
-# Local Copy Watcher (Periodic Sync)
-# Periodically syncs TeslaCam clips to a local backup location.
-# This provides protection against tampering/deletion by creating redundant copies.
+# Smart Archive Watcher
+# Automatically archives TeslaCam clips based on network availability:
+#   - WiFi available → sync to Mac and delete from Tesla
+#   - WiFi unavailable → backup locally on Pi (fallback)
 #
 # Configuration (set in teslausb_setup_variables.conf):
-#   LOCAL_BACKUP_ENABLED=true          # Enable/disable backup (default: false)
-#   LOCAL_BACKUP_INTERVAL=120          # Sync interval in seconds (default: 120)
-#   LOCAL_BACKUP_MAX_SIZE=32212254720  # Max backup size in bytes (default: 30GB)
-#   LOCAL_BACKUP_SAVED=true            # Backup SavedClips (default: true)
-#   LOCAL_BACKUP_SENTRY=true           # Backup SentryClips (default: true)
-#   LOCAL_BACKUP_RECENT=false          # Backup RecentClips (default: false)
+#   LOCAL_BACKUP_ENABLED=true          # Enable/disable (default: false)
+#   LOCAL_BACKUP_INTERVAL=120          # Check interval in seconds (default: 120)
+#   LOCAL_BACKUP_MAX_SIZE=32212254720  # Max local backup size in bytes (default: 30GB)
+#   LOCAL_BACKUP_SAVED=true            # Archive SavedClips (default: true)
+#   LOCAL_BACKUP_SENTRY=true           # Archive SentryClips (default: true)
+#   RSYNC_SERVER=<ip>                  # Mac IP address for network archive
+#   RSYNC_USER=<user>                  # SSH user on Mac
+#   RSYNC_PATH=<path>                  # Destination path on Mac
 
 # Source config if available
 if [ -f /root/teslausb_setup_variables.conf ]; then
@@ -18,7 +21,7 @@ if [ -f /root/teslausb_setup_variables.conf ]; then
 fi
 
 log() {
-  echo "$(date "+%Y-%m-%d %H:%M:%S") - LOCAL_BACKUP: $*"
+  echo "$(date "+%Y-%m-%d %H:%M:%S") - ARCHIVE: $*"
 }
 
 # Configuration with defaults
@@ -28,28 +31,40 @@ CAM_DISK="${CAM_DISK:-/backingfiles/cam_disk.bin}"
 CAM_MOUNT="${CAM_MOUNT:-/mnt/cam}"
 SYNC_INTERVAL="${LOCAL_BACKUP_INTERVAL:-120}"
 MAX_SIZE="${LOCAL_BACKUP_MAX_SIZE:-32212254720}"  # 30GB default
-BACKUP_SAVED="${LOCAL_BACKUP_SAVED:-true}"
-BACKUP_SENTRY="${LOCAL_BACKUP_SENTRY:-true}"
-BACKUP_RECENT="${LOCAL_BACKUP_RECENT:-false}"
+ARCHIVE_SAVED="${LOCAL_BACKUP_SAVED:-true}"
+ARCHIVE_SENTRY="${LOCAL_BACKUP_SENTRY:-true}"
+
+# Network archive settings
+RSYNC_SERVER="${RSYNC_SERVER:-}"
+RSYNC_USER="${RSYNC_USER:-}"
+RSYNC_PATH="${RSYNC_PATH:-}"
 
 # Check if enabled
 if [ "$ENABLED" != "true" ]; then
-  log "Backup is disabled. Set LOCAL_BACKUP_ENABLED=true to enable."
+  log "Disabled. Set LOCAL_BACKUP_ENABLED=true to enable."
   exit 0
 fi
 
-# Network archive settings (for checking if WiFi/network is available)
-RSYNC_SERVER="${RSYNC_SERVER:-}"
-RSYNC_USER="${RSYNC_USER:-}"
+log "Starting Smart Archive Watcher..."
+log "  Check interval: ${SYNC_INTERVAL}s"
+log "  Archive SavedClips: $ARCHIVE_SAVED"
+log "  Archive SentryClips: $ARCHIVE_SENTRY"
+if [ -n "$RSYNC_SERVER" ]; then
+  log "  Network archive: $RSYNC_USER@$RSYNC_SERVER:$RSYNC_PATH"
+fi
+log "  Local backup dir: $BACKUP_DIR (max $((MAX_SIZE / 1073741824))GB)"
+
+# Create directories
+mkdir -p "$BACKUP_DIR"
+mkdir -p "$CAM_MOUNT"
 
 # Function to check if network archive is reachable
-network_archive_reachable() {
+network_reachable() {
   if [ -z "$RSYNC_SERVER" ]; then
-    # No network archive configured, always do local backup
-    return 1
+    return 1  # No network archive configured
   fi
   
-  # Try to ping the server (quick network check)
+  # Quick ping check
   if ping -c 1 -W 3 "$RSYNC_SERVER" >/dev/null 2>&1; then
     return 0  # Reachable
   else
@@ -57,89 +72,147 @@ network_archive_reachable() {
   fi
 }
 
-log "Starting..."
-log "  Backup directory: $BACKUP_DIR"
-log "  Sync interval: ${SYNC_INTERVAL}s"
-log "  Max size: $((MAX_SIZE / 1073741824))GB"
-log "  Backup SavedClips: $BACKUP_SAVED"
-log "  Backup SentryClips: $BACKUP_SENTRY"
-log "  Backup RecentClips: $BACKUP_RECENT"
-
-# Create directories
-mkdir -p "$BACKUP_DIR"
-mkdir -p "$CAM_MOUNT"
-
-# Function to sync files from TeslaCam to backup
-sync_files() {
-  log "Starting sync..."
-  
+# Function to mount the Tesla disk
+mount_cam() {
   # Check if disk image exists
   if [ ! -f "$CAM_DISK" ]; then
     log "ERROR: Disk image not found: $CAM_DISK"
     return 1
   fi
   
-  # Unmount if already mounted (to get fresh view)
-  umount "$CAM_MOUNT" 2>/dev/null || true
-  losetup -D 2>/dev/null || true
-  
-  # Setup loop device and mount
-  losetup -fP "$CAM_DISK"
-  LOOP=$(losetup -j "$CAM_DISK" | cut -d: -f1)
-  
-  if [ -z "$LOOP" ]; then
-    log "ERROR: Could not setup loop device"
-    return 1
+  # Already mounted?
+  if mountpoint -q "$CAM_MOUNT" 2>/dev/null; then
+    return 0
   fi
   
-  # Mount read-only to avoid conflicts with Tesla writing
-  mount -o ro "${LOOP}p1" "$CAM_MOUNT"
+  # Setup loop device and mount
+  local loop_dev
+  loop_dev=$(losetup -f)
+  losetup -P "$loop_dev" "$CAM_DISK"
+  mount "${loop_dev}p1" "$CAM_MOUNT"
   
   if ! mountpoint -q "$CAM_MOUNT"; then
     log "ERROR: Could not mount disk"
-    losetup -d "$LOOP" 2>/dev/null || true
+    losetup -d "$loop_dev" 2>/dev/null || true
+    return 1
+  fi
+  
+  return 0
+}
+
+# Function to unmount the Tesla disk
+unmount_cam() {
+  if mountpoint -q "$CAM_MOUNT" 2>/dev/null; then
+    sync
+    umount "$CAM_MOUNT" 2>/dev/null || true
+  fi
+  # Clean up any loop devices for cam_disk
+  losetup -j "$CAM_DISK" 2>/dev/null | cut -d: -f1 | while read -r loop; do
+    losetup -d "$loop" 2>/dev/null || true
+  done
+}
+
+# Function to do network archive (sync to Mac, delete from Tesla)
+network_archive() {
+  log "Network archive starting..."
+  
+  if ! mount_cam; then
+    return 1
+  fi
+  
+  local total_synced=0
+  
+  # Process SavedClips
+  if [ "$ARCHIVE_SAVED" = "true" ]; then
+    local saved_dir="$CAM_MOUNT/TeslaCam/SavedClips"
+    if [ -d "$saved_dir" ]; then
+      local file_count
+      file_count=$(find "$saved_dir" -name "*.mp4" 2>/dev/null | wc -l)
+      if [ "$file_count" -gt 0 ]; then
+        log "Syncing $file_count SavedClips files to Mac..."
+        if rsync -avh --timeout=120 --remove-source-files \
+            --no-perms --omit-dir-times \
+            "$saved_dir/" \
+            "$RSYNC_USER@$RSYNC_SERVER:$RSYNC_PATH/TeslaCam/SavedClips/" 2>&1; then
+          total_synced=$((total_synced + file_count))
+          # Clean up empty directories
+          find "$saved_dir" -type d -empty -delete 2>/dev/null || true
+        else
+          log "WARNING: rsync failed for SavedClips"
+        fi
+      fi
+    fi
+  fi
+  
+  # Process SentryClips
+  if [ "$ARCHIVE_SENTRY" = "true" ]; then
+    local sentry_dir="$CAM_MOUNT/TeslaCam/SentryClips"
+    if [ -d "$sentry_dir" ]; then
+      local file_count
+      file_count=$(find "$sentry_dir" -name "*.mp4" 2>/dev/null | wc -l)
+      if [ "$file_count" -gt 0 ]; then
+        log "Syncing $file_count SentryClips files to Mac..."
+        if rsync -avh --timeout=120 --remove-source-files \
+            --no-perms --omit-dir-times \
+            "$sentry_dir/" \
+            "$RSYNC_USER@$RSYNC_SERVER:$RSYNC_PATH/TeslaCam/SentryClips/" 2>&1; then
+          total_synced=$((total_synced + file_count))
+          # Clean up empty directories
+          find "$sentry_dir" -type d -empty -delete 2>/dev/null || true
+        else
+          log "WARNING: rsync failed for SentryClips"
+        fi
+      fi
+    fi
+  fi
+  
+  unmount_cam
+  
+  if [ "$total_synced" -gt 0 ]; then
+    log "Network archive complete: $total_synced files synced to Mac"
+  else
+    log "Network archive: no new files to sync"
+  fi
+}
+
+# Function to do local backup (fallback when no network)
+local_backup() {
+  log "Local backup starting..."
+  
+  if ! mount_cam; then
     return 1
   fi
   
   # Sync SavedClips
-  # Using default rsync behavior (compares size + mtime) instead of --ignore-existing
-  # This ensures incomplete files get re-copied once Tesla finishes writing them
-  if [ "$BACKUP_SAVED" = "true" ] && [ -d "$CAM_MOUNT/TeslaCam/SavedClips" ]; then
+  if [ "$ARCHIVE_SAVED" = "true" ] && [ -d "$CAM_MOUNT/TeslaCam/SavedClips" ]; then
     rsync -av "$CAM_MOUNT/TeslaCam/SavedClips/" "$BACKUP_DIR/SavedClips/" 2>/dev/null
-    SAVED_COUNT=$(find "$BACKUP_DIR/SavedClips" -type f 2>/dev/null | wc -l)
-    log "SavedClips: $SAVED_COUNT files"
+    local count
+    count=$(find "$BACKUP_DIR/SavedClips" -type f 2>/dev/null | wc -l)
+    log "SavedClips: $count files backed up locally"
   fi
   
   # Sync SentryClips
-  if [ "$BACKUP_SENTRY" = "true" ] && [ -d "$CAM_MOUNT/TeslaCam/SentryClips" ]; then
+  if [ "$ARCHIVE_SENTRY" = "true" ] && [ -d "$CAM_MOUNT/TeslaCam/SentryClips" ]; then
     rsync -av "$CAM_MOUNT/TeslaCam/SentryClips/" "$BACKUP_DIR/SentryClips/" 2>/dev/null
-    SENTRY_COUNT=$(find "$BACKUP_DIR/SentryClips" -type f 2>/dev/null | wc -l)
-    log "SentryClips: $SENTRY_COUNT files"
+    local count
+    count=$(find "$BACKUP_DIR/SentryClips" -type f 2>/dev/null | wc -l)
+    log "SentryClips: $count files backed up locally"
   fi
   
-  # Sync RecentClips (optional - disabled by default)
-  if [ "$BACKUP_RECENT" = "true" ] && [ -d "$CAM_MOUNT/TeslaCam/RecentClips" ]; then
-    rsync -av "$CAM_MOUNT/TeslaCam/RecentClips/" "$BACKUP_DIR/RecentClips/" 2>/dev/null
-    RECENT_COUNT=$(find "$BACKUP_DIR/RecentClips" -type f 2>/dev/null | wc -l)
-    log "RecentClips: $RECENT_COUNT files"
-  fi
+  unmount_cam
   
-  # Cleanup
-  umount "$CAM_MOUNT" 2>/dev/null || true
-  losetup -d "$LOOP" 2>/dev/null || true
-  
-  log "Sync complete"
+  log "Local backup complete"
 }
 
-# Function to manage backup storage space
+# Function to manage local backup storage space
 manage_backup_space() {
   local current_size
   current_size=$(du -sb "$BACKUP_DIR" 2>/dev/null | cut -f1 || echo "0")
   
   if [ "$current_size" -gt "$MAX_SIZE" ]; then
-    log "Storage limit exceeded ($((current_size / 1073741824))GB / $((MAX_SIZE / 1073741824))GB). Pruning..."
+    log "Local backup limit exceeded ($((current_size / 1073741824))GB / $((MAX_SIZE / 1073741824))GB). Pruning..."
     
-    # Delete oldest files first (by modification time)
+    # Delete oldest files first
     find "$BACKUP_DIR" -type f -name "*.mp4" -printf '%T@ %p\n' 2>/dev/null | \
       sort -n | \
       while read -r timestamp filepath; do
@@ -151,21 +224,19 @@ manage_backup_space() {
         log "Pruned: ${filepath#$BACKUP_DIR/}"
       done
     
-    # Clean up empty directories
     find "$BACKUP_DIR" -type d -empty -delete 2>/dev/null || true
-    
     log "Pruning complete"
   fi
 }
 
 # Main loop
 while true; do
-  # Only do local backup if network archive is NOT reachable
-  if network_archive_reachable; then
-    log "Network archive reachable - skipping local backup"
+  if network_reachable; then
+    log "WiFi available - archiving to Mac"
+    network_archive
   else
-    log "Network archive NOT reachable - doing local backup"
-    sync_files
+    log "WiFi unavailable - backing up locally"
+    local_backup
     manage_backup_space
   fi
   
