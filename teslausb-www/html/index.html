@@ -13,8 +13,6 @@
 <link rel="stylesheet" href="contextmenu.css">
 <script src="contextmenu.js"></script>
 <script src="filebrowser.js"></script>
-<script src="vendor/protobuf.min.js"></script>
-<script src="dashcam-mp4.js"></script>
 <meta name="msapplication-TileColor" content="#00aba9">
 <meta name="msapplication-config" content="/icons/browserconfig.xml">
 <meta name="theme-color" content="#ffffff">
@@ -995,16 +993,6 @@ video {
           <div style="margin-top:8px;">
             <span id="currenttime"></span><span id="totaltime"></span>
             <div id="debuginfo" style="margin-top:20px;"></div>
-          </div>
-          <!-- SEI Telemetry Data -->
-          <div id="seidata" style="margin-top:12px;font-size:12px;line-height:1.6;">
-            <div id="sei-speed" style="font-size:18px;font-weight:bold;"></div>
-            <div id="sei-gear"></div>
-            <div id="sei-autopilot"></div>
-            <div id="sei-steering"></div>
-            <div id="sei-brake"></div>
-            <div id="sei-location" style="font-size:10px;margin-top:8px;"></div>
-            <div id="sei-accel" style="font-size:10px;"></div>
           </div>
         </div>
 
@@ -2990,161 +2978,6 @@ setCurrentTabName();
 
 const mediaQuery = window.matchMedia('screen and (max-width: 824px)');
 mediaQuery.addListener(setCurrentTabName);
-
-// ============================================================
-// SEI Telemetry Display
-// ============================================================
-
-let seiData = null;
-let seiFrames = [];
-let seiProtobuf = null;
-
-// Initialize protobuf for SEI decoding
-async function initSeiProtobuf() {
-  if (seiProtobuf) return seiProtobuf;
-  try {
-    if (typeof protobuf !== 'undefined' && typeof DashcamHelpers !== 'undefined') {
-      seiProtobuf = await DashcamHelpers.initProtobuf('dashcam.proto');
-      console.log('SEI protobuf initialized');
-    }
-  } catch (e) {
-    console.log('SEI protobuf init failed:', e);
-  }
-  return seiProtobuf;
-}
-
-// Load SEI data from a video file
-async function loadSeiData(videoUrl) {
-  seiFrames = [];
-  updateSeiDisplay(null);
-  
-  try {
-    const pb = await initSeiProtobuf();
-    if (!pb) return;
-    
-    console.log('Loading SEI from:', videoUrl);
-    const response = await fetch(videoUrl);
-    const buffer = await response.arrayBuffer();
-    const mp4 = new DashcamMP4(buffer);
-    seiFrames = mp4.extractSeiMessages(pb.SeiMetadata);
-    console.log('SEI frames loaded:', seiFrames.length);
-    
-    if (seiFrames.length > 0) {
-      updateSeiDisplay(seiFrames[0]);
-    }
-  } catch (e) {
-    console.log('SEI load error:', e);
-  }
-}
-
-// Update SEI display based on current video time
-function updateSeiForTime(currentTime, duration) {
-  if (!seiFrames || seiFrames.length === 0) return;
-  
-  // Map video time to frame index
-  const frameIndex = Math.floor((currentTime / duration) * seiFrames.length);
-  const frame = seiFrames[Math.min(frameIndex, seiFrames.length - 1)];
-  
-  if (frame) {
-    updateSeiDisplay(frame);
-  }
-}
-
-// Format and display SEI data
-function updateSeiDisplay(frame) {
-  const speedEl = document.getElementById('sei-speed');
-  const gearEl = document.getElementById('sei-gear');
-  const autopilotEl = document.getElementById('sei-autopilot');
-  const steeringEl = document.getElementById('sei-steering');
-  const brakeEl = document.getElementById('sei-brake');
-  const locationEl = document.getElementById('sei-location');
-  const accelEl = document.getElementById('sei-accel');
-  
-  if (!speedEl) return; // Elements not ready
-  
-  if (!frame) {
-    speedEl.textContent = '';
-    gearEl.textContent = '';
-    autopilotEl.textContent = '';
-    steeringEl.textContent = '';
-    brakeEl.textContent = '';
-    locationEl.textContent = '';
-    accelEl.textContent = '';
-    return;
-  }
-  
-  // Speed (convert m/s to mph)
-  const speedMps = frame.vehicleSpeedMps || frame.vehicle_speed_mps || 0;
-  const speedMph = Math.abs(speedMps * 2.237);
-  speedEl.textContent = speedMph.toFixed(1) + ' mph';
-  
-  // Gear
-  const gear = frame.gearState || frame.gear_state;
-  const gearNames = {0: 'P', 1: 'D', 2: 'R', 3: 'N'};
-  gearEl.textContent = gear !== undefined ? 'Gear: ' + (gearNames[gear] || gear) : '';
-  
-  // Autopilot
-  const ap = frame.autopilotState || frame.autopilot_state;
-  const apNames = {0: 'Off', 1: 'FSD', 2: 'Autosteer', 3: 'TACC'};
-  if (ap && ap !== 0) {
-    autopilotEl.textContent = 'Autopilot: ' + (apNames[ap] || ap);
-    autopilotEl.style.color = '#00ff00';
-  } else {
-    autopilotEl.textContent = '';
-  }
-  
-  // Steering
-  const steering = frame.steeringWheelAngle || frame.steering_wheel_angle;
-  if (steering !== undefined) {
-    steeringEl.textContent = 'Steering: ' + steering.toFixed(1) + '°';
-  }
-  
-  // Brake
-  const brake = frame.brakeApplied || frame.brake_applied;
-  if (brake) {
-    brakeEl.textContent = 'BRAKE';
-    brakeEl.style.color = '#ff4444';
-  } else {
-    brakeEl.textContent = '';
-  }
-  
-  // Location
-  const lat = frame.latitudeDeg || frame.latitude_deg;
-  const lon = frame.longitudeDeg || frame.longitude_deg;
-  const heading = frame.headingDeg || frame.heading_deg;
-  if (lat && lon) {
-    locationEl.textContent = lat.toFixed(6) + ', ' + lon.toFixed(6);
-    if (heading !== undefined) {
-      locationEl.textContent += ' (' + heading.toFixed(0) + '°)';
-    }
-  }
-  
-  // Acceleration (G-forces)
-  const ax = frame.linearAccelerationMps2X || frame.linear_acceleration_mps2_x;
-  const ay = frame.linearAccelerationMps2Y || frame.linear_acceleration_mps2_y;
-  if (ax !== undefined && ay !== undefined) {
-    const gx = (ax / 9.81).toFixed(2);
-    const gy = (ay / 9.81).toFixed(2);
-    accelEl.textContent = 'G: ' + gx + ' / ' + gy;
-  }
-}
-
-// Hook into video playback to update SEI display
-const originalFrontView = document.getElementById('frontview');
-if (originalFrontView) {
-  originalFrontView.addEventListener('loadeddata', function() {
-    if (this.src) {
-      loadSeiData(this.src);
-    }
-  });
-  
-  originalFrontView.addEventListener('timeupdate', function() {
-    updateSeiForTime(this.currentTime, this.duration);
-  });
-}
-
-// Initialize SEI on page load
-initSeiProtobuf();
 
 
 </script>

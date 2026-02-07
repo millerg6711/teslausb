@@ -407,35 +407,6 @@ http://teslausb.local
 | **Viewer** | Play video clips with multi-camera sync |
 | **Diagnostics** | System logs and troubleshooting info |
 
-### SEI Telemetry Display
-
-When playing videos in the Viewer tab, the interface displays Tesla's embedded telemetry data:
-
-- **Speed**: Current vehicle speed in mph
-- **Gear**: Park, Reverse, Neutral, or Drive
-- **Autopilot**: Current autopilot state
-- **Steering**: Steering wheel angle
-- **Brake**: Brake pedal indicator
-- **Location**: GPS coordinates
-- **G-Forces**: Lateral and longitudinal acceleration
-
-**Note:** SEI data requires Tesla firmware 2025.44.25+ and Hardware 3+. Older clips may not contain telemetry.
-
-### CLI SEI Extraction
-
-For batch processing or scripting, use the included Python tool:
-
-```bash
-# Extract SEI summary from a single file
-python3 tools/extract_sei_metadata.py /path/to/video.mp4
-
-# Process all files in a directory
-python3 tools/extract_sei_metadata.py /path/to/clips/ --summary
-
-# Output full telemetry as JSON
-python3 tools/extract_sei_metadata.py /path/to/video.mp4 --full --json
-```
-
 ---
 
 ## Security Summary

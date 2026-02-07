@@ -49,15 +49,6 @@ Periodically backs up dashcam footage to a separate location on the SD card, pro
 
 See [Local Copy Watcher Setup Guide](doc/LocalCopyWatcher.md) for full instructions.
 
-### SEI Telemetry Display
-
-View Tesla's embedded vehicle telemetry overlaid on dashcam footage:
-- Speed, gear, and autopilot state
-- Steering angle and brake indicator
-- GPS coordinates and G-forces
-
-Requires Tesla firmware 2025.44.25+ and Hardware 3+.
-
 ### Network Archive with Security Hardening
 
 Archive footage to your home Mac/PC with restricted SSH access:
