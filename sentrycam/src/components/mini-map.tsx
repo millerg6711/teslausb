@@ -225,7 +225,7 @@ export const MiniMap = forwardRef<MiniMapRef, MiniMapProps>(
 
     return (
       <div ref={wrapperRef} className="z-30 select-none" style={style}>
-        <div className="rounded-lg bg-black/70 backdrop-blur-xl border border-white/[0.06] shadow-2xl overflow-hidden">
+        <div className="rounded-lg bg-black/40 backdrop-blur-md border border-white/[0.06] shadow-2xl overflow-hidden">
           {/* Drag handle */}
           <div
             className="flex items-center justify-between px-2.5 py-1.5 cursor-grab active:cursor-grabbing border-b border-white/[0.06]"
@@ -244,7 +244,7 @@ export const MiniMap = forwardRef<MiniMapRef, MiniMapProps>(
           <div
             ref={mapContainerRef}
             className="w-60 h-48"
-            style={{ zIndex: 0 }}
+            style={{ zIndex: 0, opacity: 0.75 }}
           />
         </div>
       </div>

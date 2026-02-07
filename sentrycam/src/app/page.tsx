@@ -29,7 +29,7 @@ import {
   readFilesFromHandle,
   hasDirectoryPickerSupport,
 } from '@/lib/fs-persist';
-import { FolderOpen, FileVideo, Shield, Upload, RotateCcw } from 'lucide-react';
+import { FolderOpen, FileVideo, Shield, Upload, RotateCcw, PanelRightOpen, PanelRightClose } from 'lucide-react';
 import type { VideoState } from '@/types/video';
 import { DEFAULT_LAYOUT } from '@/types/video';
 
@@ -53,9 +53,29 @@ export default function Home() {
   const telemetryFramesRef = useRef<TelemetryFrame[]>([]);
   const [hasTelemetry, setHasTelemetry] = useState(false);
   const [currentSei, setCurrentSei] = useState<SeiMetadata | null>(null);
-  const [telemetryVisible, setTelemetryVisible] = useState(true);
   const [gpsPath, setGpsPath] = useState<[number, number][]>([]);
-  const [mapVisible, setMapVisible] = useState(true);
+  const [mapVisible, setMapVisibleRaw] = useState(() => {
+    try { const v = localStorage.getItem('sentrycam-map-vis'); return v !== '0'; } catch { return true; }
+  });
+  const [sidebarOpen, setSidebarOpenRaw] = useState(() => {
+    try { const v = localStorage.getItem('sentrycam-sidebar-vis'); return v !== '0'; } catch { return true; }
+  });
+
+  // Wrapped setters that persist to localStorage
+  const setMapVisible = useCallback((updater: boolean | ((prev: boolean) => boolean)) => {
+    setMapVisibleRaw((prev) => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      try { localStorage.setItem('sentrycam-map-vis', next ? '1' : '0'); } catch {}
+      return next;
+    });
+  }, []);
+  const setSidebarOpen = useCallback((updater: boolean | ((prev: boolean) => boolean)) => {
+    setSidebarOpenRaw((prev) => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      try { localStorage.setItem('sentrycam-sidebar-vis', next ? '1' : '0'); } catch {}
+      return next;
+    });
+  }, []);
 
   const videoPlayerRef = useRef<VideoPlayerRef>(null);
   const miniMapRef = useRef<MiniMapRef>(null);
@@ -274,7 +294,6 @@ export default function Home() {
       const group = videoState.library.clipGroupById.get(groupId);
       if (!group) return;
 
-      const bestLayout = detectBestLayout(group);
       setVideoState((prev) => ({
         ...prev,
         selectedGroupId: groupId,
@@ -282,7 +301,7 @@ export default function Home() {
         currentTime: 0,
         duration: 0,
       }));
-      setLayoutId(bestLayout);
+      // Keep current layout (e.g. immersive/theater) — don't reset on clip change
     },
     [videoState.library]
   );
@@ -392,10 +411,6 @@ export default function Home() {
     // Don't clear savedFolderName so "Reopen" button still works
   }, []);
 
-  const handleTelemetryToggle = useCallback(() => {
-    setTelemetryVisible((prev) => !prev);
-  }, []);
-
   const hasVideos = videoState.library !== null && videoState.library.clipGroups.length > 0;
   const selectedGroup = hasVideos
     ? videoState.library!.clipGroupById.get(videoState.selectedGroupId) || null
@@ -415,7 +430,7 @@ export default function Home() {
 
   return (
     <div
-      className="min-h-screen flex flex-col"
+      className="h-screen flex overflow-hidden"
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -433,41 +448,56 @@ export default function Home() {
         </div>
       )}
 
-      {/* Header */}
-      <header className="border-b border-border/50 bg-card/30 backdrop-blur-sm sticky top-0 z-50">
-        <div className="px-4 h-14 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Shield className="h-5 w-5 text-primary" />
-            <h1 className="text-sm font-semibold tracking-tight">SentryCam Viewer</h1>
-            {hasVideos && videoState.library!.clipGroups.length > 0 && (
-              <span className="text-xs text-muted-foreground ml-2">
-                {videoState.library!.clipGroups.length} clip
-                {videoState.library!.clipGroups.length !== 1 ? 's' : ''}
-                {hasTelemetry && (
-                  <span className="ml-1 text-emerald-400">• Telemetry</span>
-                )}
-              </span>
+      {/* Left: header + content */}
+      <div className="flex-1 min-w-0 flex flex-col">
+        {/* Header */}
+        <header className="border-b border-border/50 bg-card/30 backdrop-blur-sm sticky top-0 z-50 flex-shrink-0">
+          <div className="px-4 h-12 flex items-center justify-between gap-4">
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <Shield className="h-4 w-4 text-primary" />
+              <h1 className="text-sm font-semibold tracking-tight">SentryCam</h1>
+            </div>
+
+            {/* Inline telemetry dashboard */}
+            {hasVideos && hasTelemetry && (
+              <div className="flex-1 flex justify-center min-w-0">
+                <TelemetryDashboard sei={currentSei} visible={true} />
+              </div>
+            )}
+
+            {hasVideos && (
+              <div className="flex items-center gap-1 flex-shrink-0">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 text-muted-foreground"
+                  onClick={() => setSidebarOpen((v) => !v)}
+                  aria-label={sidebarOpen ? 'Hide clips sidebar' : 'Show clips sidebar'}
+                >
+                  {sidebarOpen ? (
+                    <PanelRightClose className="h-4 w-4" />
+                  ) : (
+                    <PanelRightOpen className="h-4 w-4" />
+                  )}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 text-xs text-muted-foreground"
+                  onClick={handleReset}
+                >
+                  Change Files
+                </Button>
+              </div>
             )}
           </div>
+        </header>
 
-          {hasVideos && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-8 text-xs text-muted-foreground"
-              onClick={handleReset}
-            >
-              Change Files
-            </Button>
-          )}
-        </div>
-      </header>
-
-      {/* Main content */}
-      <main className="flex-1">
-        {!hasVideos ? (
-          /* Empty state / file picker */
-          <div className="flex items-center justify-center min-h-[calc(100vh-3.5rem)]">
+        {/* Main content */}
+        <main className="flex-1 min-h-0">
+          {!hasVideos ? (
+            /* Empty state / file picker */
+            <div className="flex items-center justify-center h-full">
             <div className="max-w-lg w-full mx-auto px-4 space-y-8">
               {isLoading ? (
                 /* Loading state */
@@ -603,41 +633,28 @@ export default function Home() {
             </div>
           </div>
         ) : (
-          /* Player view — full width, overlays float on top */
-          <div className="flex flex-col h-[calc(100vh-3.5rem)]">
-            <div className="flex-1 min-h-0 flex flex-col p-4 gap-3">
-              <div className="flex-1 min-h-0 relative">
-                {/* Video grid */}
-                <VideoPlayer
-                  ref={videoPlayerRef}
-                  group={selectedGroup}
-                  layoutId={layoutId}
-                  playbackRate={videoState.playbackRate}
-                  autoplay={autoplay}
-                  onTimeUpdate={handleTimeUpdate}
-                  onVideoEnd={handleVideoEnd}
-                />
+          /* Player view */
+          <div className="flex flex-col h-full">
+            <div className="flex-1 min-h-0 p-3 relative">
+              {/* Video grid */}
+              <VideoPlayer
+                ref={videoPlayerRef}
+                group={selectedGroup}
+                layoutId={layoutId}
+                playbackRate={videoState.playbackRate}
+                autoplay={autoplay}
+                onTimeUpdate={handleTimeUpdate}
+                onVideoEnd={handleVideoEnd}
+              />
 
-                {/* Telemetry overlay (draggable) */}
-                {hasTelemetry && telemetryVisible && (
-                  <TelemetryDashboard sei={currentSei} visible={true} />
-                )}
+              {/* Mini map overlay (draggable, stays on video) */}
+              {hasTelemetry && mapVisible && gpsPath.length > 0 && (
+                <MiniMap ref={miniMapRef} gpsPath={gpsPath} visible={true} layoutId={layoutId} />
+              )}
+            </div>
 
-                {/* Mini map overlay (draggable) */}
-                {hasTelemetry && mapVisible && gpsPath.length > 0 && (
-                  <MiniMap ref={miniMapRef} gpsPath={gpsPath} visible={true} layoutId={layoutId} />
-                )}
-
-                {/* Clips overlay (draggable) */}
-                <ClipBrowser
-                  library={videoState.library!}
-                  selectedGroupId={videoState.selectedGroupId}
-                  visible={true}
-                  onGroupSelect={handleGroupSelect}
-                />
-              </div>
-
-              {/* Transport controls */}
+            {/* Transport controls */}
+            <div className="px-3 pb-3 flex-shrink-0">
               <VideoControls
                 isPlaying={videoState.isPlaying}
                 currentTime={videoState.currentTime}
@@ -646,7 +663,6 @@ export default function Home() {
                 layoutId={layoutId}
                 autoplay={autoplay}
                 hasTelemetry={hasTelemetry}
-                telemetryVisible={telemetryVisible}
                 hasMap={gpsPath.length > 0}
                 mapVisible={mapVisible}
                 onPlayPause={handlePlayPause}
@@ -654,7 +670,6 @@ export default function Home() {
                 onSeek={handleSeek}
                 onLayoutChange={setLayoutId}
                 onAutoplayChange={setAutoplay}
-                onTelemetryToggle={handleTelemetryToggle}
                 onMapToggle={() => setMapVisible((v) => !v)}
                 onJumpToEvent={undefined}
                 showJumpToEvent={false}
@@ -662,7 +677,24 @@ export default function Home() {
             </div>
           </div>
         )}
-      </main>
+        </main>
+      </div>
+
+      {/* Clips sidebar — full height, animated slide */}
+      {hasVideos && (
+        <div
+          className="flex-shrink-0 overflow-hidden transition-[width] duration-300 ease-in-out border-l border-border/50"
+          style={{ width: sidebarOpen ? 200 : 0 }}
+        >
+          <div className="w-[200px] h-full">
+            <ClipBrowser
+              library={videoState.library!}
+              selectedGroupId={videoState.selectedGroupId}
+              onGroupSelect={handleGroupSelect}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

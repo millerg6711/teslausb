@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, useRef, useCallback, useEffect } from 'react';
+import { useMemo } from 'react';
 import type { SeiMetadata } from '@/lib/telemetry';
 import {
   GEAR_LABELS,
@@ -14,7 +14,7 @@ interface TelemetryDashboardProps {
   visible: boolean;
 }
 
-// --- Sub-components (same pattern as teslareplay: CSS transition + direct style) ---
+// --- Sub-components (compact for navbar) ---
 
 const SpeedCluster = ({ mps, gear }: { mps: number; gear: number }) => {
   const mph = Math.max(0, mpsToMph(mps));
@@ -23,15 +23,15 @@ const SpeedCluster = ({ mps, gear }: { mps: number; gear: number }) => {
   const gears = [0, 2, 3, 1]; // P R N D
 
   return (
-    <div className="flex items-center gap-3">
-      <div className="flex items-baseline gap-0 w-[120px]">
-        <span className="text-3xl font-semibold tabular-nums tracking-tight text-white leading-none text-right min-w-[2.25rem]">
+    <div className="flex items-center gap-2">
+      <div className="flex items-baseline gap-0">
+        <span className="text-xl font-semibold tabular-nums tracking-tight text-white leading-none text-right min-w-[1.5rem]">
           {whole}
         </span>
-        <span className="text-lg font-medium tabular-nums text-white/50 leading-none w-[18px]">
+        <span className="text-sm font-medium tabular-nums text-white/50 leading-none w-[14px]">
           {decimal}
         </span>
-        <span className="text-[11px] font-medium text-white/30 ml-1.5 self-end mb-[3px]">
+        <span className="text-[9px] font-medium text-white/30 ml-1 self-end mb-[1px]">
           MPH
         </span>
       </div>
@@ -42,7 +42,7 @@ const SpeedCluster = ({ mps, gear }: { mps: number; gear: number }) => {
           return (
             <span
               key={g}
-              className={`text-[10px] font-semibold w-[18px] h-[18px] flex items-center justify-center rounded transition-colors ${
+              className={`text-[8px] font-semibold w-[14px] h-[14px] flex items-center justify-center rounded transition-colors ${
                 isActive
                   ? g === 2
                     ? 'bg-red-500/30 text-red-400'
@@ -59,13 +59,9 @@ const SpeedCluster = ({ mps, gear }: { mps: number; gear: number }) => {
   );
 };
 
-/**
- * Steering wheel — exactly like teslareplay:
- * CSS transition on the element, set transform via style.
- */
 const SteeringWheel = ({ angle }: { angle: number }) => (
   <div
-    className="w-11 h-11 flex-shrink-0"
+    className="w-8 h-8 flex-shrink-0"
     style={{
       transform: `rotate(${angle}deg)`,
       transition: 'transform 0.1s linear',
@@ -83,9 +79,9 @@ const SteeringWheel = ({ angle }: { angle: number }) => (
 );
 
 const PedalBars = ({ accel, brake }: { accel: number; brake: boolean }) => (
-  <div className="flex flex-col gap-1 w-20">
-    <div className="flex items-center gap-1.5">
-      <span className="text-[9px] font-medium text-white/30 w-4">ACC</span>
+  <div className="flex flex-col gap-0.5 w-14">
+    <div className="flex items-center gap-1">
+      <span className="text-[7px] font-medium text-white/30 w-3">A</span>
       <div className="flex-1 h-1 bg-white/8 rounded-full overflow-hidden">
         <div
           className="h-full rounded-full bg-emerald-400/80"
@@ -96,8 +92,8 @@ const PedalBars = ({ accel, brake }: { accel: number; brake: boolean }) => (
         />
       </div>
     </div>
-    <div className="flex items-center gap-1.5">
-      <span className="text-[9px] font-medium text-white/30 w-4">BRK</span>
+    <div className="flex items-center gap-1">
+      <span className="text-[7px] font-medium text-white/30 w-3">B</span>
       <div className="flex-1 h-1 bg-white/8 rounded-full overflow-hidden">
         <div
           className={`h-full rounded-full ${brake ? 'bg-red-400/80' : 'bg-transparent'}`}
@@ -121,13 +117,13 @@ const AutopilotStatus = ({ state, left, right }: { state: number; left: boolean;
   };
 
   return (
-    <div className="flex flex-col items-center gap-[2px]">
-      <span className={`text-[10px] font-semibold tracking-wide uppercase w-14 text-center ${colorMap[state] || colorMap[0]}`}>
+    <div className="flex items-center gap-1.5">
+      <span className={`text-[8px] font-semibold tracking-wide uppercase w-10 text-center ${colorMap[state] || colorMap[0]}`}>
         {label}
       </span>
-      <div className="flex gap-2.5 items-center">
-        <span className={`text-xs transition-opacity ${left ? 'text-amber-400 animate-pulse' : 'text-white/10'}`}>◀</span>
-        <span className={`text-xs transition-opacity ${right ? 'text-amber-400 animate-pulse' : 'text-white/10'}`}>▶</span>
+      <div className="flex gap-1 items-center">
+        <span className={`text-[10px] transition-opacity ${left ? 'text-amber-400 animate-pulse' : 'text-white/10'}`}>◀</span>
+        <span className={`text-[10px] transition-opacity ${right ? 'text-amber-400 animate-pulse' : 'text-white/10'}`}>▶</span>
       </div>
     </div>
   );
@@ -144,22 +140,16 @@ const GForceMeter = ({ x, y }: { x: number; y: number }) => {
   const dotColor = magnitude > 0.8 ? '#ef4444' : magnitude > 0.3 ? '#22c55e' : '#94a3b8';
 
   return (
-    <div className="flex flex-col items-center gap-0">
-      <svg viewBox="0 0 60 60" className="w-11 h-11 flex-shrink-0">
+    <div className="flex items-center gap-0.5">
+      <svg viewBox="0 0 60 60" className="w-8 h-8 flex-shrink-0">
         <circle cx="30" cy="30" r="26" fill="none" stroke="currentColor" strokeWidth="0.5" className="text-white/10" />
         <circle cx="30" cy="30" r="13" fill="none" stroke="currentColor" strokeWidth="0.5" className="text-white/8" />
         <line x1="4" y1="30" x2="56" y2="30" stroke="currentColor" strokeWidth="0.3" className="text-white/8" />
         <line x1="30" y1="4" x2="30" y2="56" stroke="currentColor" strokeWidth="0.3" className="text-white/8" />
-        <circle cx={dotX} cy={dotY} r="6" fill={dotColor} opacity="0.15">
-          <animate attributeName="cx" to={dotX} dur="0.1s" fill="freeze" />
-          <animate attributeName="cy" to={dotY} dur="0.1s" fill="freeze" />
-        </circle>
-        <circle cx={dotX} cy={dotY} r="3.5" fill={dotColor} opacity="0.9">
-          <animate attributeName="cx" to={dotX} dur="0.1s" fill="freeze" />
-          <animate attributeName="cy" to={dotY} dur="0.1s" fill="freeze" />
-        </circle>
+        <circle cx={dotX} cy={dotY} r="6" fill={dotColor} opacity="0.15" />
+        <circle cx={dotX} cy={dotY} r="3.5" fill={dotColor} opacity="0.9" />
       </svg>
-      <span className="text-[9px] text-white/30 tabular-nums w-8 text-center">{magnitude.toFixed(1)}g</span>
+      <span className="text-[8px] text-white/30 tabular-nums w-6">{magnitude.toFixed(1)}g</span>
     </div>
   );
 };
@@ -169,8 +159,8 @@ const Compass = ({ heading }: { heading: number }) => {
   const idx = Math.round(heading / 45) % 8;
 
   return (
-    <div className="flex flex-col items-center gap-0">
-      <svg viewBox="0 0 60 60" className="w-11 h-11 flex-shrink-0">
+    <div className="flex items-center gap-0.5">
+      <svg viewBox="0 0 60 60" className="w-8 h-8 flex-shrink-0">
         <circle cx="30" cy="30" r="26" fill="none" stroke="currentColor" strokeWidth="0.5" className="text-white/10" />
         {[0, 90, 180, 270].map((a) => {
           const rad = (a * Math.PI) / 180;
@@ -188,95 +178,16 @@ const Compass = ({ heading }: { heading: number }) => {
         </g>
         <circle cx="30" cy="30" r="2" fill="currentColor" className="text-white/30" />
       </svg>
-      <span className="text-[9px] text-white/30 tabular-nums w-12 text-center">{String(Math.round(heading)).padStart(3, '\u2007')}° {cardinals[idx].padEnd(2, '\u2007')}</span>
+      <span className="text-[8px] text-white/30 tabular-nums w-8">{String(Math.round(heading)).padStart(3, '\u2007')}° {cardinals[idx]}</span>
     </div>
   );
 };
 
-const Divider = () => <div className="w-px h-9 bg-white/8" />;
+const Divider = () => <div className="w-px h-6 bg-border/50" />;
 
-// --- Drag position persistence ---
-
-const STORAGE_KEY = 'sentrycam-telemetry-pos';
-
-const loadPosition = (): { x: number; y: number } | null => {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const pos = JSON.parse(raw);
-    if (typeof pos.x === 'number' && typeof pos.y === 'number') return pos;
-  } catch {}
-  return null;
-};
-
-const savePosition = (x: number, y: number) => {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ x, y }));
-  } catch {}
-};
-
-// --- Main Dashboard ---
+// --- Main Dashboard (inline, fits in navbar) ---
 
 export const TelemetryDashboard = ({ sei, visible }: TelemetryDashboardProps) => {
-  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
-  const dragging = useRef(false);
-  const offset = useRef({ x: 0, y: 0 });
-  const rafId = useRef(0);
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const saved = loadPosition();
-    if (saved) setPos(saved);
-  }, []);
-
-  useEffect(() => {
-    const onMove = (e: PointerEvent) => {
-      if (!dragging.current || !containerRef.current) return;
-      cancelAnimationFrame(rafId.current);
-      rafId.current = requestAnimationFrame(() => {
-        const el = containerRef.current;
-        if (!el) return;
-        const parent = el.parentElement;
-        if (!parent) return;
-        const parentRect = parent.getBoundingClientRect();
-        const elW = el.offsetWidth;
-        const elH = el.offsetHeight;
-        let x = e.clientX - parentRect.left - offset.current.x;
-        let y = e.clientY - parentRect.top - offset.current.y;
-        x = Math.max(0, Math.min(x, parentRect.width - elW));
-        y = Math.max(0, Math.min(y, parentRect.height - elH));
-        setPos({ x, y });
-      });
-    };
-
-    const onUp = () => {
-      if (!dragging.current) return;
-      dragging.current = false;
-      cancelAnimationFrame(rafId.current);
-      setPos((current) => {
-        if (current) savePosition(current.x, current.y);
-        return current;
-      });
-    };
-
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-    return () => {
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-      cancelAnimationFrame(rafId.current);
-    };
-  }, []);
-
-  const handlePointerDown = useCallback((e: React.PointerEvent) => {
-    e.preventDefault();
-    dragging.current = true;
-    const el = containerRef.current;
-    if (!el) return;
-    const rect = el.getBoundingClientRect();
-    offset.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-  }, []);
-
   if (!visible || !sei) return null;
 
   const normalizedHeading = useMemo(() => {
@@ -285,41 +196,21 @@ export const TelemetryDashboard = ({ sei, visible }: TelemetryDashboardProps) =>
     return ((h % 360) + 360) % 360;
   }, [sei.heading_deg]);
 
-  const style: React.CSSProperties = pos
-    ? { position: 'absolute', left: pos.x, top: pos.y }
-    : { position: 'absolute', top: 8, left: '50%', transform: 'translateX(-50%)' };
-
   return (
-    <div ref={containerRef} className="z-30 select-none" style={style}>
-      <div
-        className="rounded-lg bg-black/70 backdrop-blur-xl border border-white/[0.06] px-4 py-2 shadow-2xl cursor-grab active:cursor-grabbing"
-        onPointerDown={handlePointerDown}
-        role="toolbar"
-        aria-label="Telemetry dashboard — drag to reposition"
-      >
-        <div className="flex items-center gap-4 pointer-events-none">
-          <SteeringWheel angle={sei.steering_wheel_angle || 0} />
-
-          <SpeedCluster mps={sei.vehicle_speed_mps || 0} gear={sei.gear_state || 0} />
-
-          <Divider />
-
-          <PedalBars accel={sei.accelerator_pedal_position || 0} brake={sei.brake_applied || false} />
-
-          <Divider />
-
-          <AutopilotStatus
-            state={sei.autopilot_state || 0}
-            left={sei.blinker_on_left || false}
-            right={sei.blinker_on_right || false}
-          />
-
-          <Divider />
-
-          <GForceMeter x={sei.linear_acceleration_mps2_x || 0} y={sei.linear_acceleration_mps2_y || 0} />
-          <Compass heading={normalizedHeading} />
-        </div>
-      </div>
+    <div className="flex items-center gap-3">
+      <SteeringWheel angle={sei.steering_wheel_angle || 0} />
+      <SpeedCluster mps={sei.vehicle_speed_mps || 0} gear={sei.gear_state || 0} />
+      <Divider />
+      <PedalBars accel={sei.accelerator_pedal_position || 0} brake={sei.brake_applied || false} />
+      <Divider />
+      <AutopilotStatus
+        state={sei.autopilot_state || 0}
+        left={sei.blinker_on_left || false}
+        right={sei.blinker_on_right || false}
+      />
+      <Divider />
+      <GForceMeter x={sei.linear_acceleration_mps2_x || 0} y={sei.linear_acceleration_mps2_y || 0} />
+      <Compass heading={normalizedHeading} />
     </div>
   );
 };

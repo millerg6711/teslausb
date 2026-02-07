@@ -9,7 +9,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Play, Pause, SkipForward, LayoutGrid, Gauge, MapPin } from 'lucide-react';
+import { Play, Pause, SkipForward, LayoutGrid, MapPin } from 'lucide-react';
 import { GRID_LAYOUTS } from '@/types/video';
 
 interface VideoControlsProps {
@@ -20,7 +20,6 @@ interface VideoControlsProps {
   layoutId: string;
   autoplay: boolean;
   hasTelemetry: boolean;
-  telemetryVisible: boolean;
   hasMap: boolean;
   mapVisible: boolean;
   onPlayPause: () => void;
@@ -28,7 +27,6 @@ interface VideoControlsProps {
   onSeek: (time: number) => void;
   onLayoutChange: (layoutId: string) => void;
   onAutoplayChange: (enabled: boolean) => void;
-  onTelemetryToggle: () => void;
   onMapToggle: () => void;
   onJumpToEvent?: () => void;
   showJumpToEvent: boolean;
@@ -51,7 +49,6 @@ export const VideoControls = ({
   layoutId,
   autoplay,
   hasTelemetry,
-  telemetryVisible,
   hasMap,
   mapVisible,
   onPlayPause,
@@ -59,7 +56,6 @@ export const VideoControls = ({
   onSeek,
   onLayoutChange,
   onAutoplayChange,
-  onTelemetryToggle,
   onMapToggle,
   onJumpToEvent,
   showJumpToEvent,
@@ -137,7 +133,7 @@ export const VideoControls = ({
             <SelectTrigger className="h-7 w-[180px] text-xs bg-transparent border-border/50">
               <SelectValue />
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent position="popper" className="max-h-none">
               {Object.entries(GRID_LAYOUTS).map(([id, layout]) => (
                 <SelectItem key={id} value={id} className="text-xs">
                   {layout.name}
@@ -161,26 +157,6 @@ export const VideoControls = ({
         </label>
 
         {/* Telemetry toggle */}
-        {hasTelemetry && (
-          <>
-            <div className="h-4 w-px bg-border/50 mx-1" />
-            <Button
-              onClick={onTelemetryToggle}
-              variant="ghost"
-              size="sm"
-              className={`h-7 text-xs gap-1 ${
-                telemetryVisible
-                  ? 'text-primary'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-              aria-label="Toggle telemetry dashboard"
-            >
-              <Gauge className="h-3 w-3" />
-              Telemetry
-            </Button>
-          </>
-        )}
-
         {/* Map toggle */}
         {hasMap && (
           <>
