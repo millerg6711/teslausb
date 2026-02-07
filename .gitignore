@@ -10,3 +10,5 @@
 *.img
 *.img.gz
 connect.sh
+watch_teslausb_backup.sh
+dashcam/
