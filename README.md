@@ -36,9 +36,47 @@ Optional:
 - A case and/or cooler for the SBC. For the Raspberry Pi 4 I like the ["armor case"](https://www.amazon.com/s?k=Raspberry+Pi+4+Armor+Case) (available with or without fans), which appears to do a good job of protecting the Pi while keeping it cool.
 - USB Splitter if you don't want to lose a front USB port. [The Onvian Splitter](https://www.amazon.com/gp/product/B01KX4TKH6) has been reported working by multiple people on reddit. Some SBCs require separate power and data connection, so may require a splitter or a USB hub to connect to the car.
 
+## Fork Features
+
+This fork (`millerg6711/teslausb`) includes additional features for Turo hosts and fleet operators:
+
+### Local Copy Watcher (Tamper Protection)
+
+Periodically backs up dashcam footage to a separate location on the SD card, protecting against:
+- Guest attempts to delete footage
+- USB format operations (footage survives in backup)
+- Tampering during rentals
+
+See [Local Copy Watcher Setup Guide](doc/LocalCopyWatcher.md) for full instructions.
+
+### SEI Telemetry Display
+
+View Tesla's embedded vehicle telemetry overlaid on dashcam footage:
+- Speed, gear, and autopilot state
+- Steering angle and brake indicator
+- GPS coordinates and G-forces
+
+Requires Tesla firmware 2025.44.25+ and Hardware 3+.
+
+### Network Archive with Security Hardening
+
+Archive footage to your home Mac/PC with restricted SSH access:
+- Dedicated user isolation
+- Write-only access (stolen Pi can't read your files)
+- Automatic cleanup after successful archive
+
+See [Part 7 of the Local Copy Watcher guide](doc/LocalCopyWatcher.md#part-7-network-archive-setup-optional).
+
 ## Installing
 
 To install teslausb on a Raspberry Pi, it is recommended to use the [prebuilt image](https://github.com/marcone/teslausb/releases) and [one step setup instructions](doc/OneStepSetup.md). For other SBCs, start [here](https://github.com/marcone/teslausb/wiki/Installation)
+
+**To use this fork's features**, add to your `teslausb_setup_variables.conf`:
+
+```bash
+export REPO=millerg6711
+export BRANCH=main-dev
+```
 
 ## Contributing
 
