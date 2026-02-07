@@ -173,15 +173,33 @@ export CAM_SIZE=100G
 Add these lines to enable tamper protection:
 
 ```bash
-# Enable Local Copy Watcher for tamper protection
-export LOCAL_COPY_ENABLED=true
+# === Local Backup Configuration ===
+export LOCAL_BACKUP_ENABLED=true       # Enable backup
+export LOCAL_BACKUP_INTERVAL=120       # Sync every 2 minutes
+export LOCAL_BACKUP_SAVED=true         # Backup SavedClips
+export LOCAL_BACKUP_SENTRY=true        # Backup SentryClips
+export LOCAL_BACKUP_RECENT=false       # Don't backup RecentClips (too much data)
 
 # Set backup storage limit based on your SD card size
-# 256GB SD: 107374182400 (100GB)
 # 512GB SD: 214748364800 (200GB)
 # 1TB SD:   429496729600 (400GB) - recommended
-export LOCAL_COPY_MAX_SIZE=429496729600
+export LOCAL_BACKUP_MAX_SIZE=429496729600
+
+# Disable snapshots (redundant when using local backup)
+export SNAPSHOTS_ENABLED=false
 ```
+
+#### Configuration Options
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LOCAL_BACKUP_ENABLED` | false | Enable/disable backup |
+| `LOCAL_BACKUP_INTERVAL` | 120 | Sync interval in seconds |
+| `LOCAL_BACKUP_MAX_SIZE` | 30GB | Max backup storage in bytes |
+| `LOCAL_BACKUP_SAVED` | true | Backup SavedClips |
+| `LOCAL_BACKUP_SENTRY` | true | Backup SentryClips |
+| `LOCAL_BACKUP_RECENT` | false | Backup RecentClips (uses lots of space) |
+| `SNAPSHOTS_ENABLED` | true | Disable to save space when using backup |
 
 #### Storage Size Reference
 
@@ -197,9 +215,8 @@ export LOCAL_COPY_MAX_SIZE=429496729600
 ├── System/OS:             ~6 GB
 ├── Reserved space:        ~6 GB
 ├── CAM_SIZE (Tesla USB):  100 GB
-├── LOCAL_COPY_MAX_SIZE:   400 GB (backups)
-├── Snapshots/mutable:     ~200 GB
-└── Buffer:                ~288 GB
+├── LOCAL_BACKUP_MAX_SIZE: 400 GB (backups)
+└── Buffer:                ~488 GB
 ```
 
 This gives you **3-4 weeks of backup retention** — plenty of time for any Turo dispute.
