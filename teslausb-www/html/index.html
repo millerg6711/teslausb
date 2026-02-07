@@ -896,6 +896,12 @@ video {
       <button class="group2" onclick="syncfunc();">Trigger archive/sync</button>
       <span id="synctext" style="padding-left:20px;"></span>
       <p>
+      <button class="group2" onclick="forceArchive();">Force Archive Now</button>
+      <span id="forceArchiveText" style="padding-left:20px;"></span>
+      <p>
+      <button class="group2" onclick="clearRecent();">Clear RecentClips</button>
+      <span id="clearRecentText" style="padding-left:20px;"></span>
+      <p>
       <button class="group2" onclick="startspeedtest(this);" id="speedtestbutton">Run network speed test</button>
       <span>
         <svg id="speedspinner" width="20" height="20" style="margin-left: 10px; vertical-align:middle;visibility:hidden;" viewBox="-12 -12 24 24">
@@ -1361,6 +1367,103 @@ function syncfunc() {
   var msg=document.getElementById('synctext');
   msg.textContent="Sync triggered";
   setTimeout(function() { msg.textContent=""; }, 5000);
+}
+
+function forceArchive() {
+  var msg=document.getElementById('forceArchiveText');
+  msg.textContent="Starting archive...";
+  msg.style.color="orange";
+  
+  var request = new XMLHttpRequest();
+  request.open('GET', cachebustingurl('cgi-bin/force_archive.sh'));
+  request.onreadystatechange = function () {
+    if (request.readyState === 4) {
+      if (request.status === 200) {
+        try {
+          var result = JSON.parse(request.responseText);
+          if (result.status === "started") {
+            msg.textContent = "Archive running - USB drive disconnected temporarily";
+            msg.style.color = "green";
+            // Poll for completion
+            setTimeout(checkArchiveStatus, 3000);
+          } else if (result.status === "busy") {
+            msg.textContent = result.message;
+            msg.style.color = "orange";
+          } else {
+            msg.textContent = result.message;
+            msg.style.color = "red";
+          }
+        } catch (e) {
+          msg.textContent = "Archive started";
+          msg.style.color = "green";
+        }
+      } else {
+        msg.textContent = "Failed to start archive";
+        msg.style.color = "red";
+      }
+      setTimeout(function() { msg.textContent=""; msg.style.color=""; }, 15000);
+    }
+  }
+  request.send();
+}
+
+function clearRecent() {
+  var msg=document.getElementById('clearRecentText');
+  msg.textContent="Clearing...";
+  msg.style.color="orange";
+  
+  var request = new XMLHttpRequest();
+  request.open('GET', cachebustingurl('cgi-bin/clear_recent.sh'));
+  request.onreadystatechange = function () {
+    if (request.readyState === 4) {
+      if (request.status === 200) {
+        try {
+          var result = JSON.parse(request.responseText);
+          msg.textContent = result.message;
+          msg.style.color = result.status === "started" ? "green" : "orange";
+        } catch (e) {
+          msg.textContent = "Clearing started";
+          msg.style.color = "green";
+        }
+      } else {
+        msg.textContent = "Failed";
+        msg.style.color = "red";
+      }
+      setTimeout(function() { msg.textContent=""; msg.style.color=""; }, 10000);
+    }
+  }
+  request.send();
+}
+
+function checkArchiveStatus() {
+  var msg=document.getElementById('forceArchiveText');
+  var request = new XMLHttpRequest();
+  request.open('HEAD', cachebustingurl('cgi-bin/status.sh'));
+  request.onreadystatechange = function () {
+    if (request.readyState === 4) {
+      // Just check if Pi is still reachable - archive done when USB reconnects
+      if (request.status === 200) {
+        // Check drives status
+        readfile({url:'cgi-bin/status.sh', callback:function(value) {
+          try {
+            var status = JSON.parse(value);
+            if (status.drives_active === "yes") {
+              msg.textContent = "Archive complete - USB reconnected";
+              msg.style.color = "green";
+              setTimeout(function() { msg.textContent=""; msg.style.color=""; }, 10000);
+            } else {
+              setTimeout(checkArchiveStatus, 2000);
+            }
+          } catch(e) {
+            setTimeout(checkArchiveStatus, 2000);
+          }
+        }});
+      } else {
+        setTimeout(checkArchiveStatus, 2000);
+      }
+    }
+  }
+  request.send();
 }
 
 class Speedometer {

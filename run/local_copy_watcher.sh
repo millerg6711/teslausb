@@ -38,6 +38,25 @@ if [ "$ENABLED" != "true" ]; then
   exit 0
 fi
 
+# Network archive settings (for checking if WiFi/network is available)
+RSYNC_SERVER="${RSYNC_SERVER:-}"
+RSYNC_USER="${RSYNC_USER:-}"
+
+# Function to check if network archive is reachable
+network_archive_reachable() {
+  if [ -z "$RSYNC_SERVER" ] || [ -z "$RSYNC_USER" ]; then
+    # No network archive configured, always do local backup
+    return 1
+  fi
+  
+  # Try to reach the server (quick SSH check)
+  if ssh -o BatchMode=yes -o ConnectTimeout=5 "$RSYNC_USER@$RSYNC_SERVER" "true" 2>/dev/null; then
+    return 0  # Reachable
+  else
+    return 1  # Not reachable
+  fi
+}
+
 log "Starting..."
 log "  Backup directory: $BACKUP_DIR"
 log "  Sync interval: ${SYNC_INTERVAL}s"
@@ -141,8 +160,15 @@ manage_backup_space() {
 
 # Main loop
 while true; do
-  sync_files
-  manage_backup_space
-  log "Next sync in ${SYNC_INTERVAL}s..."
+  # Only do local backup if network archive is NOT reachable
+  if network_archive_reachable; then
+    log "Network archive reachable - skipping local backup"
+  else
+    log "Network archive NOT reachable - doing local backup"
+    sync_files
+    manage_backup_space
+  fi
+  
+  log "Next check in ${SYNC_INTERVAL}s..."
   sleep "$SYNC_INTERVAL"
 done
