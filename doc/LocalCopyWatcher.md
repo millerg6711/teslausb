@@ -1,14 +1,16 @@
 # Local Copy Watcher Setup Guide (Tamper Protection for Turo Hosts)
 
-This guide walks you through setting up a Raspberry Pi with teslausb and the Local Copy Watcher feature, which provides protection against footage tampering or deletion by immediately copying dashcam files to a separate backup location.
+This guide walks you through setting up a Raspberry Pi with teslausb and the Local Copy Watcher feature, which provides protection against footage tampering or deletion by periodically backing up dashcam files to a separate location.
 
 ## Overview
 
 The Local Copy Watcher:
-- Monitors TeslaCam folders in real-time using `inotifywait`
-- Immediately copies new .mp4, .json, and .png files to a backup location
+- Periodically syncs SavedClips and SentryClips to a backup location (every 2 minutes)
+- Uses `rsync` to efficiently copy only new files
 - Works completely offline — no WiFi or internet required
 - Automatically manages storage by pruning oldest files when limit is reached
+
+**Note:** Real-time monitoring with `inotifywait` doesn't work when Tesla has exclusive block-level access to the disk image via USB gadget mode. The periodic sync approach remounts the disk to see fresh data.
 
 Combined with Tesla's **Guest Mode** and a **Glovebox PIN**, this creates a multi-layer defense that protects your footage even if a guest attempts to delete it.
 
@@ -26,8 +28,17 @@ Combined with Tesla's **Guest Mode** and a **Glovebox PIN**, this creates a mult
   - Stores both Tesla USB drive + local backups
   - Single USB cable to glovebox, no power issues
 - **MicroSD card reader** for your computer
-- **Micro-USB data cable** (not a charge-only cable)
+- **Micro-USB DATA cable** (NOT a charge-only cable — this is critical!)
 - **Power source** for initial setup (computer USB port works)
+
+**IMPORTANT: USB Cable Selection**
+
+Many USB cables are "charge-only" and will NOT work. The Pi will power on but Tesla won't see the drive. You need a cable that carries both power AND data. Test by:
+1. Plugging Pi into your Mac/PC
+2. Running `diskutil list external` (Mac) or checking Disk Management (Windows)
+3. If you see a ~70GB drive appear, the cable works
+
+If nothing appears, try a different cable. Data cables are often thicker and labeled "data" or "sync".
 
 **Why 1TB SD card?**
 - You're storing footage twice (Tesla USB + backup copy)
@@ -326,21 +337,33 @@ ssh pi@teslausb.local
 Check the backup directory:
 
 ```bash
-ls -la /mutable/local_backup/
-ls -la /mutable/local_backup/SentryClips/
+ls -la /backingfiles/local_backup/
+ls -la /backingfiles/local_backup/SavedClips/
+ls -la /backingfiles/local_backup/SentryClips/
 ```
 
-You should see copied files.
+You should see copied files after the first sync cycle (within 2 minutes).
 
-### Step 6.3: Check the Log
+### Step 6.3: Check the Service Status
 
 ```bash
-grep "Local Copy" /mutable/archiveloop.log
+sudo systemctl status local_copy_watcher
+```
+
+You should see "active (running)".
+
+### Step 6.4: Check the Logs
+
+```bash
+sudo journalctl -u local_copy_watcher -n 20
 ```
 
 You should see entries like:
 ```
-Local Copy Watcher: Copied SentryClips/2026-02-04_12-30-00/front.mp4 (8234567 bytes)
+2026-02-07 00:50:39 - Starting sync...
+2026-02-07 00:51:57 - SavedClips backup: 30 files
+2026-02-07 00:51:57 - SentryClips backup: 0 files
+2026-02-07 00:51:57 - Sync complete
 ```
 
 ---
@@ -360,6 +383,19 @@ Local Copy Watcher: Copied SentryClips/2026-02-04_12-30-00/front.mp4 (8234567 by
 
 ## Troubleshooting
 
+### Tesla shows "Insert USB Drive"
+
+**Most common cause: Charge-only USB cable**
+
+1. Test the cable by plugging Pi into your Mac/PC
+2. Run `diskutil list external` (Mac) or check Disk Management (Windows)
+3. If no drive appears, the cable is charge-only — use a different cable
+
+Other checks:
+- Ensure you're using the **USB port** on the Pi (closer to HDMI), not the **PWR port**
+- SSH into Pi and check: `cat /sys/class/udc/*/state` — should show "configured"
+- Check if g_mass_storage is loaded: `lsmod | grep g_mass`
+
 ### Pi not booting / LED not flashing
 
 - Ensure you used a USB **data** cable, not charge-only
@@ -369,19 +405,19 @@ Local Copy Watcher: Copied SentryClips/2026-02-04_12-30-00/front.mp4 (8234567 by
 ### WiFi not connecting
 
 - Double-check SSID and password in config (watch for special characters)
-- Ensure your WiFi is 2.4GHz (Pi Zero W doesn't support 5GHz)
+- Ensure your WiFi is 2.4GHz (Pi Zero 2 W supports both, but check your network)
 - SSH via USB: connect Pi to computer, then `ssh pi@teslausb.local`
 
 ### Local Copy Watcher not running
 
-Check if it's enabled:
+Check service status:
 ```bash
-grep LOCAL_COPY /boot/teslausb_setup_variables.conf
+sudo systemctl status local_copy_watcher
 ```
 
-Check the log:
+Check logs for errors:
 ```bash
-grep -i "local copy" /mutable/archiveloop.log
+sudo journalctl -u local_copy_watcher -n 30
 ```
 
 Verify the script exists:
@@ -391,33 +427,43 @@ ls -la /root/bin/local_copy_watcher.sh
 
 ### No backup files appearing
 
-Check that TeslaCam directories exist:
+Backups only appear after the sync cycle (every 2 minutes). Check:
 ```bash
-ls -la /mnt/cam/TeslaCam/
+ls -la /backingfiles/local_backup/
 ```
 
-The watcher only copies files after Tesla writes them. Generate some footage first.
+If still empty after a few minutes, check the service logs for errors.
 
 ### Storage full
 
 Check disk space:
 ```bash
-df -h
+df -h /backingfiles
 ```
 
 The watcher auto-prunes old files, but you can manually clear:
 ```bash
-rm -rf /mutable/local_backup/RecentClips/*
+sudo rm -rf /backingfiles/local_backup/SavedClips/*
 ```
 
 ---
 
 ## Technical Details
 
-- **Monitoring method**: `inotifywait` with `close_write` and `moved_to` events
-- **File types copied**: .mp4, .json, .png
-- **Minimum file size**: 100KB (smaller files skipped as incomplete)
-- **Copy method**: `rsync` if available, falls back to `cp`
-- **Restart behavior**: Auto-restarts if watched directories become unavailable
-- **Default backup location**: `/mutable/local_backup`
-- **Default max size**: 10GB (configurable)
+- **Sync method**: Periodic `rsync` every 2 minutes (configurable via `SYNC_INTERVAL`)
+- **Folders backed up**: SavedClips and SentryClips (not RecentClips to save space)
+- **Copy method**: `rsync -av --ignore-existing` (only copies new files)
+- **Mount strategy**: Read-only remount each sync cycle to see fresh data from Tesla
+- **USB gadget**: Uses `g_mass_storage` kernel module to present disk to Tesla
+- **Default backup location**: `/backingfiles/local_backup`
+- **Default max size**: 30GB (configurable via `LOCAL_BACKUP_MAX_SIZE`)
+
+### Why Periodic Sync Instead of Real-Time?
+
+When the Pi presents the disk image to Tesla via USB gadget mode, Tesla writes directly to the block device. The Pi's local filesystem mount doesn't see these changes in real-time because:
+
+1. Tesla has exclusive block-level access via `g_mass_storage`
+2. The local mount's cache doesn't reflect changes made at the block level
+3. `inotifywait` only detects changes made through the local filesystem
+
+The periodic sync approach solves this by unmounting and remounting the disk image each cycle, which forces the filesystem to read fresh data from the block device.
