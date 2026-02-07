@@ -3003,8 +3003,8 @@ let seiProtobuf = null;
 async function initSeiProtobuf() {
   if (seiProtobuf) return seiProtobuf;
   try {
-    if (typeof protobuf !== 'undefined' && typeof DashcamMP4 !== 'undefined') {
-      seiProtobuf = await DashcamMP4.initProtobuf('dashcam.proto');
+    if (typeof protobuf !== 'undefined' && typeof DashcamHelpers !== 'undefined') {
+      seiProtobuf = await DashcamHelpers.initProtobuf('dashcam.proto');
       console.log('SEI protobuf initialized');
     }
   } catch (e) {
