@@ -9,7 +9,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Play, Pause, SkipForward, LayoutGrid, MapPin, ScanSearch } from 'lucide-react';
+import { Play, Pause, SkipForward, LayoutGrid, MapPin } from 'lucide-react';
 import { GRID_LAYOUTS } from '@/types/video';
 
 interface VideoControlsProps {
@@ -22,14 +22,12 @@ interface VideoControlsProps {
   hasTelemetry: boolean;
   hasMap: boolean;
   mapVisible: boolean;
-  hitboxEnabled: boolean;
   onPlayPause: () => void;
   onPlaybackRateChange: (rate: number) => void;
   onSeek: (time: number) => void;
   onLayoutChange: (layoutId: string) => void;
   onAutoplayChange: (enabled: boolean) => void;
   onMapToggle: () => void;
-  onHitboxToggle: () => void;
   onJumpToEvent?: () => void;
   showJumpToEvent: boolean;
 }
@@ -53,14 +51,12 @@ export const VideoControls = ({
   hasTelemetry,
   hasMap,
   mapVisible,
-  hitboxEnabled,
   onPlayPause,
   onPlaybackRateChange,
   onSeek,
   onLayoutChange,
   onAutoplayChange,
   onMapToggle,
-  onHitboxToggle,
   onJumpToEvent,
   showJumpToEvent,
 }: VideoControlsProps) => {
@@ -180,23 +176,6 @@ export const VideoControls = ({
             </Button>
           </>
         )}
-
-        {/* Hitbox toggle */}
-        <div className="h-4 w-px bg-border/50 mx-1" />
-        <Button
-          onClick={onHitboxToggle}
-          variant={hitboxEnabled ? 'default' : 'ghost'}
-          size="sm"
-          className={`h-7 text-xs gap-1 ${
-            hitboxEnabled
-              ? 'bg-primary text-primary-foreground hover:bg-primary/90'
-              : 'text-muted-foreground hover:text-foreground'
-          }`}
-          aria-label="Toggle object detection"
-        >
-          <ScanSearch className="h-3 w-3" />
-          Hitbox
-        </Button>
 
         {showJumpToEvent && onJumpToEvent && (
           <>
