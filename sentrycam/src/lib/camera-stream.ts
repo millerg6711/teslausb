@@ -167,8 +167,6 @@ function ensureDecoder(stream: CameraStream): VideoDecoder {
         stream.decoder = null;
       },
     });
-    // New decoder must receive a keyframe first; force seek path on next decode
-    stream.lastDecodedFrameIndex = -1;
   }
 
   if (stream.decoder.state === 'unconfigured') {
@@ -179,8 +177,6 @@ function ensureDecoder(stream: CameraStream): VideoDecoder {
       codedHeight: config.height,
       description: config.avcCData,
     });
-    // After configure() a keyframe is required; force seek path on next decode
-    stream.lastDecodedFrameIndex = -1;
   }
 
   return stream.decoder;
@@ -221,15 +217,9 @@ function decodeStreamFrame(stream: CameraStream, index: number): void {
         description: config.avcCData,
       });
 
-      // Walk back to nearest keyframe (decoder requires keyframe after configure())
+      // Walk back to nearest keyframe
       let keyIdx = index;
       while (keyIdx > 0 && !stream.frames[keyIdx].keyframe) keyIdx--;
-      if (!stream.frames[keyIdx].keyframe) {
-        // No keyframe at or before index; find first keyframe in stream
-        keyIdx = 0;
-        while (keyIdx < stream.frames.length && !stream.frames[keyIdx].keyframe) keyIdx++;
-        if (keyIdx > index || keyIdx >= stream.frames.length) return;
-      }
 
       // Only draw the final frame (suppress intermediates via seekTargetTimestamp)
       stream.seekTargetTimestamp = targetFrame.timestamp;

@@ -17,12 +17,17 @@ import {
   getStreamDuration,
   type CameraStream,
 } from '@/lib/camera-stream';
-import type { SeiMetadata } from '@/lib/telemetry';
+import {
+  detect,
+  drawDetections,
+  clearOverlay,
+  isModelReady,
+} from '@/lib/object-detector';
 import type { ClipGroup, CameraKey } from '@/types/video';
 import { GRID_LAYOUTS, DEFAULT_LAYOUT } from '@/types/video';
 
 // ---------------------------------------------------------------------------
-// Public interface
+// Public interface (unchanged — parent page.tsx doesn't need to change)
 // ---------------------------------------------------------------------------
 
 export interface VideoPlayerRef {
@@ -39,7 +44,7 @@ interface VideoPlayerProps {
   layoutId: string;
   playbackRate: number;
   autoplay: boolean;
-  sei: SeiMetadata | null;
+  hitboxEnabled: boolean;
   onTimeUpdate: (time: number, duration: number) => void;
   onVideoEnd: () => void;
 }
@@ -51,6 +56,7 @@ interface VideoPlayerProps {
 const CameraView = ({
   label,
   canvasRef,
+  overlayRef,
   isMaster,
   isFocused,
   objectFit,
@@ -58,6 +64,7 @@ const CameraView = ({
 }: {
   label: string;
   canvasRef: (el: HTMLCanvasElement | null) => void;
+  overlayRef?: (el: HTMLCanvasElement | null) => void;
   isMaster: boolean;
   isFocused: boolean;
   objectFit?: 'cover' | 'contain';
@@ -83,6 +90,13 @@ const CameraView = ({
       className="w-full h-full"
       style={{ objectFit: objectFit || 'cover' }}
     />
+    {overlayRef && (
+      <canvas
+        ref={overlayRef}
+        className="absolute inset-0 w-full h-full pointer-events-none"
+        style={{ objectFit: objectFit || 'cover' }}
+      />
+    )}
     <span className="absolute bottom-2 left-2 text-xs font-medium text-white/80 bg-black/50 px-2 py-0.5 rounded backdrop-blur-sm pointer-events-none">
       {label}
     </span>
@@ -102,7 +116,7 @@ const CameraView = ({
 // =====================================================================
 
 export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
-  ({ group, layoutId, playbackRate, autoplay, sei, onTimeUpdate, onVideoEnd }, ref) => {
+  ({ group, layoutId, playbackRate, autoplay, hitboxEnabled, onTimeUpdate, onVideoEnd }, ref) => {
     const streamsRef = useRef<Map<CameraKey, CameraStream>>(new Map());
     const canvasRefs = useRef<Map<CameraKey, HTMLCanvasElement>>(new Map());
     const [loaded, setLoaded] = useState(false);
@@ -119,6 +133,12 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
     const playbackRateRef = useRef(playbackRate);
     const onTimeUpdateRef = useRef(onTimeUpdate);
     const onVideoEndRef = useRef(onVideoEnd);
+
+    // Hitbox detection state
+    const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
+    const overlayCtxRef = useRef<CanvasRenderingContext2D | null>(null);
+    const hitboxEnabledRef = useRef(hitboxEnabled);
+    hitboxEnabledRef.current = hitboxEnabled;
 
     // Keep refs up to date
     playbackRateRef.current = playbackRate;
@@ -229,14 +249,18 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
     // Playback scheduler — drift-correcting clock (like teslareplay)
     // -----------------------------------------------------------------
 
+    // Timestamp-based sync — used for initial load and user-initiated seeks.
+    // Positions each slave via binary search on timestamp.
     const syncAllStreamsToIndex = useCallback((index: number) => {
       const masterStream = streamsRef.current.get(masterCamera);
       if (!masterStream || !masterStream.frames[index]) return;
 
       const masterTimestamp = masterStream.frames[index].timestamp;
 
+      // Decode master
       showStreamFrame(masterStream, index);
 
+      // Decode slaves at the matching timestamp
       streamsRef.current.forEach((stream, cam) => {
         if (cam === masterCamera) return;
         if (stream.frames.length === 0) return;
@@ -245,10 +269,14 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
         showStreamFrame(stream, slaveIdx);
       });
 
+      // Report time to parent (seconds)
       const duration = getStreamDuration(masterStream) / 1000;
       onTimeUpdateRef.current(masterTimestamp / 1000, duration);
     }, [masterCamera]);
 
+    // Sequential advance — used during playback. All cameras advance by +1
+    // frame, keeping every stream on the fast sequential decode path.
+    // Drift correction every 30 frames re-syncs slaves by timestamp.
     const advanceAllStreams = useCallback(() => {
       const masterStream = streamsRef.current.get(masterCamera);
       if (!masterStream) return;
@@ -258,8 +286,10 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
 
       const masterTimestamp = masterStream.frames[masterIndex].timestamp;
 
+      // Decode master
       showStreamFrame(masterStream, masterIndex);
 
+      // Advance slaves sequentially
       streamsRef.current.forEach((stream, cam) => {
         if (cam === masterCamera) return;
         if (stream.frames.length === 0) return;
@@ -267,8 +297,10 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
         const prevIdx = slaveFrameIndicesRef.current.get(cam) ?? 0;
         let nextIdx = prevIdx + 1;
 
+        // Clamp to valid range
         if (nextIdx >= stream.frames.length) nextIdx = stream.frames.length - 1;
 
+        // Periodic drift correction: every 30 frames, check timestamp alignment
         if (masterIndex % 30 === 0) {
           const correctIdx = findFrameIndexAtTime(stream, masterTimestamp);
           if (Math.abs(correctIdx - nextIdx) > 1) {
@@ -280,6 +312,7 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
         showStreamFrame(stream, nextIdx);
       });
 
+      // Report time to parent (seconds)
       const duration = getStreamDuration(masterStream) / 1000;
       onTimeUpdateRef.current(masterTimestamp / 1000, duration);
     }, [masterCamera]);
@@ -292,12 +325,14 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
 
       const next = currentFrameIndexRef.current + 1;
 
+      // End of stream
       if (next >= masterStream.frames.length) {
         stopPlayback();
         onVideoEndRef.current();
         return;
       }
 
+      // Backpressure: if decoder queue is backing up, wait
       if (masterStream.decoder && masterStream.decoder.decodeQueueSize > 5) {
         playTimerRef.current = setTimeout(playNext, 5);
         return;
@@ -306,6 +341,7 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
       currentFrameIndexRef.current = next;
       advanceAllStreams();
 
+      // Drift-correcting scheduling
       const frameDur = masterStream.frames[next].duration || 33;
       const scaledDur = frameDur / playbackRateRef.current;
 
@@ -313,6 +349,7 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
       const now = performance.now();
       let delay = nextFrameTimeRef.current - now;
 
+      // Sync recovery: if we've fallen behind > 100ms, reset clock
       if (delay < -100) {
         nextFrameTimeRef.current = now;
         delay = 0;
@@ -337,6 +374,7 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
         clearTimeout(playTimerRef.current);
         playTimerRef.current = null;
       }
+      // Flush decoders so the last frame is actually drawn
       streamsRef.current.forEach((stream) => {
         if (stream.decoder && stream.decoder.state === 'configured') {
           stream.decoder.flush().catch(() => {});
@@ -345,7 +383,7 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
     }, []);
 
     // -----------------------------------------------------------------
-    // Imperative API
+    // Imperative API (same interface as before)
     // -----------------------------------------------------------------
 
     useImperativeHandle(ref, () => ({
@@ -361,6 +399,7 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
         currentFrameIndexRef.current = idx;
         syncAllStreamsToIndex(idx);
 
+        // Reset scheduling clock if playing
         if (playingRef.current) {
           nextFrameTimeRef.current = performance.now();
         }
@@ -368,7 +407,9 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
       setPlaybackRate: (rate: number) => {
         playbackRateRef.current = rate;
       },
-      toggleMute: () => {},
+      toggleMute: () => {
+        // Canvas rendering has no audio — no-op
+      },
       getMasterFile: () => {
         if (!group) return null;
         return group.filesByCamera.get(masterCamera) || null;
@@ -385,6 +426,71 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
     }, [focusedCamera]);
 
     // -----------------------------------------------------------------
+    // Hitbox detection loop (chained — runs as fast as hardware allows)
+    // -----------------------------------------------------------------
+    useEffect(() => {
+      if (!hitboxEnabled || !loaded) {
+        if (overlayCtxRef.current && overlayCanvasRef.current) {
+          clearOverlay(
+            overlayCtxRef.current,
+            overlayCanvasRef.current.width,
+            overlayCanvasRef.current.height,
+          );
+        }
+        return;
+      }
+
+      let running = true;
+
+      const runDetection = async () => {
+        while (running && hitboxEnabledRef.current) {
+          const targetCam = focusedCamera || masterCamera;
+          const sourceCanvas = canvasRefs.current.get(targetCam);
+          const overlay = overlayCanvasRef.current;
+          const ctx = overlayCtxRef.current;
+
+          if (sourceCanvas && overlay && ctx && isModelReady()) {
+            if (overlay.width !== sourceCanvas.width || overlay.height !== sourceCanvas.height) {
+              overlay.width = sourceCanvas.width;
+              overlay.height = sourceCanvas.height;
+            }
+
+            const detections = await detect(sourceCanvas);
+            if (!running || !hitboxEnabledRef.current) break;
+
+            if (detections.length > 0) {
+              drawDetections(ctx, detections, overlay.width, overlay.height);
+            } else {
+              clearOverlay(ctx, overlay.width, overlay.height);
+            }
+          } else {
+            await new Promise((r) => setTimeout(r, 200));
+          }
+        }
+      };
+
+      runDetection();
+
+      return () => {
+        running = false;
+        // Clear overlay
+        if (overlayCtxRef.current && overlayCanvasRef.current) {
+          clearOverlay(
+            overlayCtxRef.current,
+            overlayCanvasRef.current.width,
+            overlayCanvasRef.current.height,
+          );
+        }
+      };
+    }, [hitboxEnabled, loaded, focusedCamera, masterCamera]);
+
+    // Overlay canvas ref callback
+    const makeOverlayRef = useCallback((el: HTMLCanvasElement | null) => {
+      overlayCanvasRef.current = el;
+      overlayCtxRef.current = el ? el.getContext('2d') : null;
+    }, []);
+
+    // -----------------------------------------------------------------
     // Render
     // -----------------------------------------------------------------
 
@@ -395,6 +501,7 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
     const makeCanvasRef = (camera: CameraKey) => (el: HTMLCanvasElement | null) => {
       if (el) {
         canvasRefs.current.set(camera, el);
+        // Attach canvas to existing stream
         const stream = streamsRef.current.get(camera);
         if (stream && stream.canvas !== el) {
           stream.canvas = el;
@@ -418,6 +525,7 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
             <CameraView
               label={slot.label}
               canvasRef={makeCanvasRef(slot.camera)}
+              overlayRef={hitboxEnabled ? makeOverlayRef : undefined}
               isMaster={slot.camera === masterCamera}
               isFocused={true}
               objectFit="contain"
@@ -453,6 +561,13 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
                 className="w-full h-full"
                 style={{ objectFit: 'contain' }}
               />
+              {hitboxEnabled && (
+                <canvas
+                  ref={makeOverlayRef}
+                  className="absolute inset-0 w-full h-full pointer-events-none"
+                  style={{ objectFit: 'contain' }}
+                />
+              )}
               <span className="absolute bottom-2 left-2 text-xs font-medium text-white/60 bg-black/50 px-2 py-0.5 rounded backdrop-blur-sm pointer-events-none z-20">
                 {mainCamera.label}
               </span>
@@ -498,6 +613,7 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
             key={slot.camera}
             label={slot.label}
             canvasRef={makeCanvasRef(slot.camera)}
+            overlayRef={hitboxEnabled && slot.camera === masterCamera ? makeOverlayRef : undefined}
             isMaster={slot.camera === masterCamera}
             isFocused={false}
             onFocus={() => setFocusedCamera(slot.camera)}

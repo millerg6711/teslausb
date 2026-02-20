@@ -29,6 +29,7 @@ import {
   readFilesFromHandle,
   hasDirectoryPickerSupport,
 } from '@/lib/fs-persist';
+import { loadModel, onStatusChange, type ModelStatus } from '@/lib/object-detector';
 import { FolderOpen, FileVideo, Shield, Upload, RotateCcw, PanelRightOpen, PanelRightClose } from 'lucide-react';
 import type { VideoState } from '@/types/video';
 import { DEFAULT_LAYOUT } from '@/types/video';
@@ -60,6 +61,24 @@ export default function Home() {
   const [sidebarOpen, setSidebarOpenRaw] = useState(() => {
     try { const v = localStorage.getItem('sentrycam-sidebar-vis'); return v !== '0'; } catch { return true; }
   });
+  const [hitboxEnabled, setHitboxEnabledRaw] = useState(() => {
+    try { const v = localStorage.getItem('sentrycam-hitbox'); return v === '1'; } catch { return false; }
+  });
+
+  // Object detection model loading state
+  const [modelStatus, setModelStatus] = useState<ModelStatus>('idle');
+  const [modelProgress, setModelProgress] = useState(0);
+
+  // Preload detection model on mount
+  useEffect(() => {
+    const unsub = onStatusChange((status, progress) => {
+      setModelStatus(status);
+      setModelProgress(progress);
+    });
+    loadModel();
+    return unsub;
+  }, []);
+
   // Wrapped setters that persist to localStorage
   const setMapVisible = useCallback((updater: boolean | ((prev: boolean) => boolean)) => {
     setMapVisibleRaw((prev) => {
@@ -75,6 +94,14 @@ export default function Home() {
       return next;
     });
   }, []);
+  const setHitboxEnabled = useCallback((updater: boolean | ((prev: boolean) => boolean)) => {
+    setHitboxEnabledRaw((prev) => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      try { localStorage.setItem('sentrycam-hitbox', next ? '1' : '0'); } catch {}
+      return next;
+    });
+  }, []);
+
   const videoPlayerRef = useRef<VideoPlayerRef>(null);
   const miniMapRef = useRef<MiniMapRef>(null);
   const directoryInputRef = useRef<HTMLInputElement>(null);
@@ -176,6 +203,7 @@ export default function Home() {
     if (library.clipGroups.length === 0) return;
 
     const firstGroup = library.clipGroups[0];
+
     setVideoState({
       library,
       selectedGroupId: firstGroup.id,
@@ -471,7 +499,7 @@ export default function Home() {
                   size="icon"
                   className="h-7 w-7 text-muted-foreground"
                   onClick={() => setSidebarOpen((v) => !v)}
-                  aria-label={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
+                  aria-label={sidebarOpen ? 'Hide clips sidebar' : 'Show clips sidebar'}
                 >
                   {sidebarOpen ? (
                     <PanelRightClose className="h-4 w-4" />
@@ -490,6 +518,19 @@ export default function Home() {
               </div>
             )}
           </div>
+
+          {/* Model loading progress bar */}
+          {modelStatus === 'loading' && (
+            <div className="absolute bottom-0 left-0 right-0 h-1 bg-muted/30 overflow-hidden">
+              <div
+                className="h-full bg-primary shadow-[0_0_8px_rgba(var(--primary),0.5)] transition-[width] duration-300 ease-out"
+                style={{ width: `${modelProgress}%` }}
+              />
+              <span className="absolute right-2 -top-5 text-[10px] text-muted-foreground/80 font-mono">
+                Loading detection model… {Math.round(modelProgress)}%
+              </span>
+            </div>
+          )}
         </header>
 
         {/* Main content */}
@@ -604,7 +645,6 @@ export default function Home() {
                         <div className="text-xs text-muted-foreground">Choose individual .mp4 files</div>
                       </div>
                     </Button>
-
                   </div>
 
                   <div className="text-center space-y-2">
@@ -643,7 +683,7 @@ export default function Home() {
                 layoutId={layoutId}
                 playbackRate={videoState.playbackRate}
                 autoplay={autoplay}
-                sei={currentSei}
+                hitboxEnabled={hitboxEnabled}
                 onTimeUpdate={handleTimeUpdate}
                 onVideoEnd={handleVideoEnd}
               />
@@ -666,12 +706,14 @@ export default function Home() {
                 hasTelemetry={hasTelemetry}
                 hasMap={gpsPath.length > 0}
                 mapVisible={mapVisible}
+                hitboxEnabled={hitboxEnabled}
                 onPlayPause={handlePlayPause}
                 onPlaybackRateChange={handlePlaybackRateChange}
                 onSeek={handleSeek}
                 onLayoutChange={setLayoutId}
                 onAutoplayChange={setAutoplay}
                 onMapToggle={() => setMapVisible((v) => !v)}
+                onHitboxToggle={() => setHitboxEnabled((v) => !v)}
                 onJumpToEvent={undefined}
                 showJumpToEvent={false}
               />
